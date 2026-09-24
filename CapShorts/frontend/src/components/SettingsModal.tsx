@@ -550,7 +550,7 @@ export const SettingsModal: React.FC = () => {
                   <div className="bg-black/40 border border-white/[0.06] rounded-xl p-2.5">
                     <span className="text-[10px] text-zinc-500 uppercase tracking-wider block font-semibold">Studio Version</span>
                     <span className="text-xs font-bold text-white mt-0.5 block">
-                      v{updateInfo?.current_version || '1.1.1'}
+                      v{updateInfo?.current_version || '1.1.2'}
                     </span>
                   </div>
                   <div className="bg-black/40 border border-white/[0.06] rounded-xl p-2.5">

@@ -38,7 +38,7 @@ from groq_transcribe import transcribe_with_groq_pool
 from transliterate import transliterate_transcript, transliterate_word
 from telemetry import telemetry
 
-app = FastAPI(title="CapShorts AI Engine", version="1.1.1")
+app = FastAPI(title="CapShorts AI Engine", version="1.1.2")
 
 def get_ffmpeg_bin() -> str:
     """Resolves platform-appropriate FFmpeg executable."""
@@ -1259,7 +1259,7 @@ def get_update_status():
     git_dir = os.path.join(project_root, ".git")
     is_git_repo = os.path.exists(git_dir)
     
-    current_version = "1.1.1"
+    current_version = "1.1.2"
     current_commit = "unknown"
     latest_commit = "unknown"
     update_available = False
