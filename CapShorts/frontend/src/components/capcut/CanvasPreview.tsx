@@ -61,6 +61,7 @@ export const CanvasPreview: React.FC = () => {
     showEmojis,
     videoSegments,
     isScrubbing,
+    exportSettings,
   } = useVideoStore(
     useShallow((state) => ({
       videoUrl: state.videoUrl,
@@ -98,6 +99,7 @@ export const CanvasPreview: React.FC = () => {
       showEmojis: state.showEmojis,
       videoSegments: state.videoSegments,
       isScrubbing: state.isScrubbing,
+      exportSettings: state.exportSettings,
     }))
   );
 
@@ -338,7 +340,7 @@ export const CanvasPreview: React.FC = () => {
   const effectiveScale = (videoScale > 5 ? videoScale / 100 : videoScale) || 1.0;
 
   const stepFrame = (frames: number) => {
-    const fps = 30;
+    const fps = exportSettings?.fps || 30;
     const delta = frames / fps;
     const newTime = Math.max(0, Math.min(duration, currentTime + delta));
     setCurrentTime(newTime);

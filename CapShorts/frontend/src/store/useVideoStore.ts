@@ -161,7 +161,7 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
   clips: [],
   selectedClipId: null,
 
-  groqApiKey: typeof window !== 'undefined' ? localStorage.getItem('opencaption_groq_key') || '' : '',
+  groqApiKey: typeof window !== 'undefined' ? localStorage.getItem('capshorts_groq_key') || localStorage.getItem('opencaption_groq_key') || '' : '',
   rangeMode: 'full',
 
   brollList: [],
@@ -362,7 +362,7 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
 
   setGroqApiKey: (groqApiKey) => {
     if (typeof window !== 'undefined') {
-      localStorage.setItem('opencaption_groq_key', groqApiKey);
+      localStorage.setItem('capshorts_groq_key', groqApiKey);
     }
     set({ groqApiKey });
   },
@@ -609,7 +609,14 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
         duration: Number((time - target.start).toFixed(2)),
         sourceEnd: Number((target.sourceStart + splitOffset).toFixed(2))
       };
-      const part2Id = `seg-${Math.random().toString(36).substring(2, 9)}`;
+      const genRandomSuffix = (len: number = 8) => {
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+          return crypto.randomUUID().replace(/-/g, '').substring(0, len);
+        }
+        return Math.random().toString(36).substring(2, 2 + len);
+      };
+
+      const part2Id = `seg-${genRandomSuffix(8)}`;
       const part2: VideoSegment = {
         id: part2Id,
         name: `${baseName} (Part 2)`,
@@ -630,7 +637,9 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
       if (wordIdx !== -1) {
         const targetWord = newTranscript[wordIdx];
         if (time - targetWord.start > 0.12 && targetWord.end - time > 0.12) {
-          const randSuffix = Math.random().toString(36).substring(2, 8);
+          const randSuffix = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+            ? crypto.randomUUID().replace(/-/g, '').substring(0, 6)
+            : Math.random().toString(36).substring(2, 8);
           const totalDur = Math.max(0.01, targetWord.end - targetWord.start);
           const ratio = Math.max(0.2, Math.min(0.8, (time - targetWord.start) / totalDur));
           const splitChar = Math.max(1, Math.min(targetWord.word.length - 1, Math.round(targetWord.word.length * ratio)));

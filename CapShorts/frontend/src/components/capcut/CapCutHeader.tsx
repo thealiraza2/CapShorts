@@ -73,23 +73,8 @@ export const CapCutHeader: React.FC = () => {
 
   return (
     <header className="h-13 bg-[#0d0d11]/95 backdrop-blur-2xl border-b border-white/[0.08] px-3.5 flex items-center justify-between z-30 select-none text-zinc-100 flex-shrink-0 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]">
-      {/* Left: macOS Traffic Lights + Brand + Project Title + Undo/Redo */}
+      {/* Left: Brand + Project Title + Undo/Redo */}
       <div className="flex items-center space-x-3">
-        {/* macOS Window Controls (Traffic Lights) */}
-        <div className="flex items-center space-x-2 pl-1 pr-2.5 group/traffic" title="macOS Window Controls">
-          <div className="w-3 h-3 rounded-full bg-[#ff5f57] border border-[#e0443e]/40 flex items-center justify-center text-[7px] text-black/60 font-bold opacity-90 group-hover/traffic:opacity-100 transition-opacity cursor-pointer shadow-xs">
-            <span className="opacity-0 group-hover/traffic:opacity-100 transition-opacity leading-none">×</span>
-          </div>
-          <div className="w-3 h-3 rounded-full bg-[#febc2e] border border-[#d89e24]/40 flex items-center justify-center text-[7px] text-black/60 font-bold opacity-90 group-hover/traffic:opacity-100 transition-opacity cursor-pointer shadow-xs">
-            <span className="opacity-0 group-hover/traffic:opacity-100 transition-opacity leading-none">−</span>
-          </div>
-          <div className="w-3 h-3 rounded-full bg-[#28c840] border border-[#1aab29]/40 flex items-center justify-center text-[7px] text-black/60 font-bold opacity-90 group-hover/traffic:opacity-100 transition-opacity cursor-pointer shadow-xs">
-            <span className="opacity-0 group-hover/traffic:opacity-100 transition-opacity leading-none">+</span>
-          </div>
-        </div>
-
-        <div className="h-4 w-[1px] bg-white/[0.08]" />
-
         {/* CapShorts Brand Logo Badge */}
         <div className="flex items-center space-x-2.5">
           <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 via-sky-500 to-cyan-400 p-[1px] shadow-sm shadow-indigo-500/25 ring-1 ring-white/15 flex items-center justify-center">

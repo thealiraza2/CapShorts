@@ -188,7 +188,7 @@ def download_broll_clip(video_url: str, clip_id: str) -> Optional[str]:
             video_url,
             headers={
                 "User-Agent": "CapShorts/1.1",
-                "Accept": "video/*,*/*"
+                "Accept": "video/*,image/*,*/*"
             }
         )
         with urllib.request.urlopen(req, timeout=20) as resp:
@@ -199,7 +199,7 @@ def download_broll_clip(video_url: str, clip_id: str) -> Optional[str]:
                 return None
 
             content_type = (resp.headers.get("Content-Type") or "").lower()
-            if content_type and not any(ct in content_type for ct in ["video/", "octet-stream", "binary"]):
+            if content_type and not any(ct in content_type for ct in ["video/", "image/", "octet-stream", "binary"]):
                 print(f"[broll] Rejected unexpected Content-Type: {content_type}")
                 return None
 

@@ -9,7 +9,6 @@ import os
 import sys
 import time
 import uuid
-import hashlib
 import platform
 import threading
 import requests

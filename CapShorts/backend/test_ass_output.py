@@ -121,6 +121,16 @@ class TestPathContainment(unittest.TestCase):
         with self.assertRaises(HTTPException):
             get_safe_contained_path(self.test_dir, "/etc/shadow")
 
+    def test_windows_drive_letter_blocked(self):
+        with self.assertRaises(HTTPException):
+            get_safe_contained_path(self.test_dir, "C:\\Windows\\win.ini")
+
+    def test_empty_or_whitespace_blocked(self):
+        with self.assertRaises(HTTPException):
+            get_safe_contained_path(self.test_dir, "   ")
+        with self.assertRaises(HTTPException):
+            get_safe_contained_path(self.test_dir, "")
+
 
 class TestClipGenerator(unittest.TestCase):
     def test_empty_transcript_returns_empty_or_safe(self):

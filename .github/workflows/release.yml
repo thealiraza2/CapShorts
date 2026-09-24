@@ -47,14 +47,22 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "CapShorts/src-tauri/binaries/bin" | Out-Null
-          Write-Host "Downloading portable FFmpeg for Windows..."
-          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile "ffmpeg.zip"
+          Write-Host "Downloading pinned portable FFmpeg for Windows..."
+          $expectedSha256 = "91a1dbfa89b77235a8c327b86fc36e70f69d3bfed0c24ce840452cd43ce26366"
+          $downloadUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-23-14-55/ffmpeg-N-126782-gdc52424419-win64-gpl.zip"
+          Invoke-WebRequest -Uri $downloadUrl -OutFile "ffmpeg.zip"
+          $actualSha256 = (Get-FileHash -Path "ffmpeg.zip" -Algorithm SHA256).Hash.ToLower()
+          if ($actualSha256 -ne $expectedSha256) {
+            Write-Error "FFmpeg checksum mismatch! Expected: $expectedSha256, but received: $actualSha256"
+            exit 1
+          }
+          Write-Host "FFmpeg SHA256 checksum verified successfully: $actualSha256"
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg_extracted" -Force
           $ffmpegPath = Get-ChildItem -Path "ffmpeg_extracted" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1 -ExpandProperty FullName
           $ffprobePath = Get-ChildItem -Path "ffmpeg_extracted" -Recurse -Filter "ffprobe.exe" | Select-Object -First 1 -ExpandProperty FullName
           Copy-Item $ffmpegPath "CapShorts/src-tauri/binaries/bin/ffmpeg.exe"
           Copy-Item $ffprobePath "CapShorts/src-tauri/binaries/bin/ffprobe.exe"
-          Write-Host "FFmpeg binaries ready in CapShorts/src-tauri/binaries/bin!"
+          Write-Host "FFmpeg binaries verified and ready in CapShorts/src-tauri/binaries/bin!"
 
       # macOS: Install portable FFmpeg
       - name: Download & Setup macOS FFmpeg binaries

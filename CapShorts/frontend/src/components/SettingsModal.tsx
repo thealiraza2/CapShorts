@@ -143,7 +143,6 @@ export const SettingsModal: React.FC = () => {
 
   const handleSavePexelsKey = () => {
     localStorage.setItem('capshorts_pexels_key', pexelsKey.trim());
-    localStorage.setItem('opencaption_pexels_key', pexelsKey.trim());
     setSaveMessage('Pexels B-Roll API key saved successfully!');
     setTimeout(() => setSaveMessage(null), 3000);
   };
@@ -151,22 +150,9 @@ export const SettingsModal: React.FC = () => {
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4 select-none animate-fade">
       <div className="bg-zinc-900/90 backdrop-blur-2xl border border-white/[0.12] rounded-3xl w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-200">
-        {/* macOS Style Header with Traffic Lights */}
+        {/* Clean Modal Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.08] bg-zinc-950/50">
           <div className="flex items-center space-x-3">
-            {/* macOS Window Controls */}
-            <div className="flex items-center space-x-2 mr-2">
-              <button
-                onClick={() => setIsSettingsModalOpen(false)}
-                className="w-3 h-3 rounded-full bg-[#ff5f57] border border-[#e0443e] hover:brightness-90 transition-all flex items-center justify-center group"
-                title="Close"
-              >
-                <X className="w-2 h-2 text-black/70 opacity-0 group-hover:opacity-100" />
-              </button>
-              <div className="w-3 h-3 rounded-full bg-[#febc2e] border border-[#d89e24]" />
-              <div className="w-3 h-3 rounded-full bg-[#28c840] border border-[#1aab29]" />
-            </div>
-
             <div className="flex items-center space-x-2">
               <div className="w-7 h-7 rounded-lg bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
                 <Settings className="w-3.5 h-3.5" />

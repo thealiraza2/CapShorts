@@ -1238,12 +1238,12 @@ def export_subtitles(payload: SubtitleExportPayload):
 
 @app.get("/api/download-subtitles/{filename}")
 def download_subtitles_file(filename: str):
-    """Serves subtitle files with appropriate media types."""
-    path = os.path.join(OUTPUT_DIR, filename)
+    """Serves subtitle files with appropriate media types strictly contained within OUTPUT_DIR."""
+    path = get_safe_contained_path(OUTPUT_DIR, filename)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File not found")
     media_type = "application/x-subrip" if filename.endswith(".srt") else "text/vtt" if filename.endswith(".vtt") else "text/plain"
-    return FileResponse(path, media_type=media_type, filename=filename)
+    return FileResponse(path, media_type=media_type, filename=os.path.basename(path))
 
 @app.get("/api/system/update-status")
 def get_update_status():
