@@ -29,9 +29,9 @@ Ready-to-run desktop installers. **No Python, Git, or FFmpeg installation needed
 
 | Platform | Installer | Architecture | Download Link |
 | :--- | :--- | :--- | :--- |
-| **Windows** | `.exe` Setup | 64-bit (x86_64) | [**Download Setup (.exe)**](https://github.com/thealiraza2/CapShorts/releases/download/v1.1.0/CapShorts_1.1.0_x64-setup.exe) |
-| **Windows** | `.msi` Package | 64-bit Enterprise | [**Download MSI (.msi)**](https://github.com/thealiraza2/CapShorts/releases/download/v1.1.0/CapShorts_1.1.0_x64_en-US.msi) |
-| **macOS** | `.dmg` Universal | Apple Silicon (M1/M2/M3/M4) & Intel | [**Download Universal (.dmg)**](https://github.com/thealiraza2/CapShorts/releases/download/v1.1.0/CapShorts_1.1.0_universal.dmg) |
+| **Windows** | `.exe` Setup | 64-bit (x86_64) | [**Download Setup (.exe)**](https://github.com/thealiraza2/CapShorts/releases/download/v1.1.1/CapShorts_1.1.1_x64-setup.exe) |
+| **Windows** | `.msi` Package | 64-bit Enterprise | [**Download MSI (.msi)**](https://github.com/thealiraza2/CapShorts/releases/download/v1.1.1/CapShorts_1.1.1_x64_en-US.msi) |
+| **macOS** | `.dmg` Universal | Apple Silicon (M1/M2/M3/M4) & Intel | [**Download Universal (.dmg)**](https://github.com/thealiraza2/CapShorts/releases/download/v1.1.1/CapShorts_1.1.1_universal.dmg) |
 
 ---
 
