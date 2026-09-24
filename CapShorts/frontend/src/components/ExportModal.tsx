@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Share2, CheckCircle2, Download, Sparkles, FolderDown, Zap, Flame, Loader2, FileText } from 'lucide-react';
 import { useVideoStore } from '../store/useVideoStore';
 import { apiUrl } from '../config';
@@ -94,6 +94,16 @@ export const ExportModal: React.FC = () => {
   );
   const [exportingSubtitle, setExportingSubtitle] = useState<'srt' | 'vtt' | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (activeClip) {
@@ -233,49 +243,56 @@ export const ExportModal: React.FC = () => {
       const data = await res.json();
       const taskId = data.task_id;
 
-      // Poll progress every 500ms
-      const interval = setInterval(async () => {
+      // Poll progress every 500ms with timeout and error handling
+      let pollCount = 0;
+      const maxPolls = 1200; // 10 minutes at 500ms intervals
+
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+
+      pollIntervalRef.current = setInterval(async () => {
+        pollCount += 1;
+        if (pollCount > maxPolls) {
+          if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+          setIsExporting(false);
+          setExportProgress(0, 'Export timed out after 10 minutes.');
+          return;
+        }
+
         try {
           const pollRes = await fetch(apiUrl(`/api/export/progress/${taskId}`));
           if (pollRes.ok) {
             const taskData = await pollRes.json();
+            
+            if (taskData.error || taskData.status?.toLowerCase().includes('error')) {
+              if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+              setIsExporting(false);
+              setExportProgress(0, taskData.error || 'Render failed on engine');
+              return;
+            }
+
             setExportProgress(taskData.progress, taskData.status);
 
             if (taskData.progress >= 100) {
-              clearInterval(interval);
+              if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
               setIsExporting(false);
               const cleanUrl = taskData.download_url ? apiUrl(taskData.download_url) : '#';
               setExportResultUrl(cleanUrl);
             }
           }
-        } catch (e) {
+        } catch (e: any) {
           console.warn("Poll error:", e);
         }
       }, 500);
 
     } catch (err: any) {
-      console.warn("Backend export fallback:", err);
-      simulateLocalExport();
-    }
-  };
-
-  const simulateLocalExport = () => {
-    let current = 10;
-    const interval = setInterval(() => {
-      current += 15;
-      if (current < 40) {
-        setExportProgress(current, "Compiling Advanced SubStation Alpha (.ass)...");
-      } else if (current < 75) {
-        setExportProgress(current, "Stitching B-Roll and Overlaying Audio...");
-      } else if (current < 99) {
-        setExportProgress(current, "Burning Subtitles with FFmpeg libx264...");
-      } else {
-        clearInterval(interval);
-        setExportProgress(100, "Complete! Video rendered without watermarks.");
-        setIsExporting(false);
-        setExportResultUrl(apiUrl('/sample_output.mp4'));
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
       }
-    }, 450);
+      setIsExporting(false);
+      setExportProgress(0, `Export failed: ${err?.message || 'Could not communicate with render engine.'}`);
+    }
   };
 
   return (

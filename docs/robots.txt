@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://thealiraza2.github.io/CapShorts/sitemap.xml

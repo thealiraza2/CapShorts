@@ -1,11 +1,12 @@
 # ==========================================
-# OpenCaption - Subproject .gitignore
+# CapShorts - Subproject .gitignore
 # ==========================================
 
 # 1. Environment Variables & Secrets (CRITICAL)
 .env
 .env.*
 !.env.example
+*.log
 *.pem
 *.key
 *.cert

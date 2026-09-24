@@ -211,7 +211,7 @@ export const MediaLibraryPanel: React.FC = () => {
           >
             <Subtitles className="w-3.5 h-3.5 text-indigo-400" />
             <span>Captions</span>
-            <span className="text-[9px] px-1 py-0.2 rounded-full bg-indigo-500/20 text-indigo-300 font-mono">AI</span>
+            <span className="text-[9px] px-1 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-mono">AI</span>
           </button>
 
           <button
@@ -236,7 +236,7 @@ export const MediaLibraryPanel: React.FC = () => {
           >
             <Scissors className="w-3.5 h-3.5 text-amber-400" />
             <span>Shorts</span>
-            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-white/[0.08] text-zinc-300 font-mono">
+            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/[0.08] text-zinc-300 font-mono">
               {clips.length}
             </span>
           </button>

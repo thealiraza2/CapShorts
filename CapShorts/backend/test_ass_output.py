@@ -1,11 +1,26 @@
 """
-test_ass_output.py - Unit tests for ASS Subtitle Generation and Preset Pipeline
+test_ass_output.py - Unit & Security Tests for Subtitles, Path Traversal, Clip Generator & Privacy
 """
 
 import json
 import os
+import sys
 import unittest
-from subtitle_gen import hex_to_ass_color, format_ass_time, apply_casing, generate_ass_subtitles
+
+from subtitle_gen import (
+    hex_to_ass_color,
+    format_ass_time,
+    format_srt_time,
+    format_vtt_time,
+    apply_casing,
+    sanitize_ass_text,
+    generate_ass_subtitles
+)
+from engine import get_safe_contained_path
+from clip_generator import detect_viral_clips
+from telemetry import is_telemetry_enabled, TelemetryManager
+from fastapi import HTTPException
+
 
 class TestSubtitleGen(unittest.TestCase):
     def setUp(self):
@@ -44,10 +59,30 @@ class TestSubtitleGen(unittest.TestCase):
         self.assertEqual(format_ass_time(65.12), "0:01:05.12")
         self.assertEqual(format_ass_time(3665.0), "1:01:05.00")
 
+    def test_format_time_carry_over(self):
+        # Centisecond carry over
+        self.assertEqual(format_ass_time(59.998), "0:01:00.00")
+        self.assertEqual(format_ass_time(1.996), "0:00:02.00")
+        self.assertEqual(format_ass_time(-5.0), "0:00:00.00")
+        # SRT millisecond carry over
+        self.assertEqual(format_srt_time(59.9999), "00:01:00,000")
+        self.assertEqual(format_srt_time(1.9996), "00:00:02,000")
+        # VTT millisecond carry over
+        self.assertEqual(format_vtt_time(59.9999), "00:01:00.000")
+
     def test_apply_casing(self):
         self.assertEqual(apply_casing("hello world", "UPPERCASE"), "HELLO WORLD")
         self.assertEqual(apply_casing("HELLO WORLD", "lowercase"), "hello world")
         self.assertEqual(apply_casing("hello world", "Title Case"), "Hello World")
+
+    def test_sanitize_ass_text(self):
+        # Strips curly braces and backslashes that inject ASS override tags
+        injected = r"{\fs200\pos(540,960)}DangerousText"
+        sanitized = sanitize_ass_text(injected)
+        self.assertNotIn("{", sanitized)
+        self.assertNotIn("}", sanitized)
+        self.assertNotIn("\\", sanitized)
+        self.assertIn("DangerousText", sanitized)
 
     def test_generate_ass_viral_shorts(self):
         preset = next(p for p in self.templates if p["id"] == "mrbeast-yellow-pop")
@@ -63,6 +98,54 @@ class TestSubtitleGen(unittest.TestCase):
         preset = next(p for p in self.templates if p["category"] == "Karaoke Sweep")
         ass = generate_ass_subtitles(self.sample_transcript, preset)
         self.assertIn("\\k", ass)
+
+
+class TestPathContainment(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = os.path.join(os.path.dirname(__file__), "temp")
+        os.makedirs(self.test_dir, exist_ok=True)
+
+    def test_valid_filename(self):
+        safe = get_safe_contained_path(self.test_dir, "video_test.mp4")
+        self.assertTrue(safe.startswith(os.path.realpath(self.test_dir)))
+
+    def test_posix_traversal_blocked(self):
+        with self.assertRaises(HTTPException):
+            get_safe_contained_path(self.test_dir, "../../etc/passwd")
+
+    def test_windows_traversal_blocked(self):
+        with self.assertRaises(HTTPException):
+            get_safe_contained_path(self.test_dir, "..\\..\\Windows\\System32\\calc.exe")
+
+    def test_absolute_path_blocked(self):
+        with self.assertRaises(HTTPException):
+            get_safe_contained_path(self.test_dir, "/etc/shadow")
+
+
+class TestClipGenerator(unittest.TestCase):
+    def test_empty_transcript_returns_empty_or_safe(self):
+        clips = detect_viral_clips([], 0.0)
+        self.assertEqual(clips, [])
+
+    def test_zero_duration_returns_empty(self):
+        words = [{"start": 0.0, "end": 0.0, "word": "hello", "keyword": False}]
+        clips = detect_viral_clips(words, 0.0)
+        self.assertIsInstance(clips, list)
+
+    def test_no_zerodivision_on_short_duration(self):
+        words = [
+            {"start": 0.1, "end": 0.2, "word": "why", "keyword": True},
+            {"start": 0.2, "end": 0.3, "word": "secrets", "keyword": True}
+        ]
+        clips = detect_viral_clips(words, 0.3)
+        self.assertIsInstance(clips, list)
+
+
+class TestTelemetryPrivacy(unittest.TestCase):
+    def test_telemetry_disabled_by_default(self):
+        manager = TelemetryManager()
+        self.assertTrue(manager.machine_id.startswith("anon_"))
+
 
 if __name__ == "__main__":
     unittest.main()

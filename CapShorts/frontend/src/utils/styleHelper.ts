@@ -13,7 +13,7 @@ export function formatCasing(text: string, casing: string): string {
   if (c.includes('upper')) return text.toUpperCase();
   if (c.includes('lower')) return text.toLowerCase();
   if (c.includes('title')) {
-    return text.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+    return text.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.slice(1).toLowerCase());
   }
   return text;
 }

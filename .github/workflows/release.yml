@@ -94,9 +94,6 @@ jobs:
             engine.py
           cd ../..
           Copy-Item -Path "CapShorts/backend/dist/backend-engine.exe" -Destination "CapShorts/src-tauri/binaries/backend-engine.exe" -Force
-          if (Test-Path "CapShorts/backend/.env") {
-            Copy-Item -Path "CapShorts/backend/.env" -Destination "CapShorts/src-tauri/binaries/.env" -Force
-          }
           Write-Host "Standalone Windows backend engine ready!"
 
       # Compile Standalone Backend Engine (macOS)
@@ -126,7 +123,6 @@ jobs:
           cd ../..
           cp CapShorts/backend/dist/backend-engine CapShorts/src-tauri/binaries/backend-engine
           chmod +x CapShorts/src-tauri/binaries/backend-engine
-          [ -f "CapShorts/backend/.env" ] && cp CapShorts/backend/.env CapShorts/src-tauri/binaries/.env || true
           echo "Standalone macOS backend engine ready!"
 
       - name: Setup Node.js

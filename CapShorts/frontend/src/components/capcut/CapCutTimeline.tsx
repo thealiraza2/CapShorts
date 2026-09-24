@@ -358,7 +358,7 @@ const VideoTrack: React.FC<VideoTrackProps> = React.memo(({
                 <span className="text-[11px] font-bold truncate">
                   {seg.name}
                 </span>
-                <span className="text-[10px] font-mono text-zinc-400 flex-shrink-0 bg-black/40 px-1 py-0.2 rounded">
+                <span className="text-[10px] font-mono text-zinc-400 flex-shrink-0 bg-black/40 px-1 py-0.5 rounded">
                   {seg.duration.toFixed(1)}s
                 </span>
               </div>

@@ -46,9 +46,9 @@ def _write_config(data: Dict[str, Any]):
 
 
 def is_telemetry_enabled() -> bool:
-    """Returns True if user has opted in to anonymous diagnostics (default: True)."""
+    """Returns True if user has opted in to anonymous diagnostics (default: False)."""
     cfg = _read_config()
-    return cfg.get("enabled", True)
+    return cfg.get("enabled", False)
 
 
 def set_telemetry_enabled(enabled: bool):
@@ -85,7 +85,7 @@ class TelemetryManager:
         return get_telemetry_url()
 
     def _get_or_create_machine_id(self) -> str:
-        """Generates or loads a persistent anonymous machine ID."""
+        """Generates or loads a persistent anonymous machine ID without hardware fingerprinting."""
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
             id_file = os.path.join(CONFIG_DIR, "machine_id.txt")
@@ -96,14 +96,13 @@ class TelemetryManager:
                     if len(mid) >= 8:
                         return mid
 
-            # Generate unique deterministic hash (anonymized)
-            raw = f"{platform.node()}-{uuid.getnode()}-{sys.platform}"
-            mid = f"pc_{hashlib.sha256(raw.encode()).hexdigest()[:12]}"
+            # Generate random persistent anonymous ID
+            mid = f"anon_{uuid.uuid4().hex[:12]}"
             with open(id_file, "w", encoding="utf-8") as f:
                 f.write(mid)
             return mid
         except Exception:
-            return f"pc_{uuid.uuid4().hex[:12]}"
+            return f"anon_{uuid.uuid4().hex[:12]}"
 
     def _get_os_info(self) -> str:
         """Formats operating system name nicely (e.g. Windows 11, macOS Sonoma)."""

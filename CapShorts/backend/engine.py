@@ -27,7 +27,7 @@ SUBPROCESS_EXTRA_KWARGS = {"creationflags": SUBPROCESS_FLAGS} if sys.platform ==
 
 from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 
@@ -38,7 +38,7 @@ from groq_transcribe import transcribe_with_groq_pool
 from transliterate import transliterate_transcript, transliterate_word
 from telemetry import telemetry
 
-app = FastAPI(title="CapShorts AI Engine", version="1.4.0")
+app = FastAPI(title="CapShorts AI Engine", version="1.1.0")
 
 def get_ffmpeg_bin() -> str:
     """Resolves platform-appropriate FFmpeg executable."""
@@ -75,11 +75,23 @@ def probe_video_dimensions(video_path: str) -> Tuple[int, int]:
         print(f"[engine] probe_video_dimensions error: {e}")
     return 1080, 1920
 
+LOCAL_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "tauri://localhost",
+    "https://tauri.localhost",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=LOCAL_ALLOWED_ORIGINS,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -105,6 +117,33 @@ ENV_FILE = os.path.join(BASE_DIR, ".env")
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+def get_safe_contained_path(base_dir: str, filename: str) -> str:
+    """
+    Validates and resolves a file path strictly within base_dir.
+    Rejects directory traversal sequences and absolute path escapes.
+    """
+    if not filename or not isinstance(filename, str):
+        raise HTTPException(status_code=400, detail="Filename cannot be empty")
+
+    raw = filename.strip()
+    if ".." in raw or raw.startswith("/") or raw.startswith("\\") or (len(raw) > 1 and raw[1] == ":"):
+        raise HTTPException(status_code=400, detail="Path traversal forbidden")
+
+    clean_name = os.path.basename(raw.replace("\\", "/"))
+    if not clean_name or clean_name in (".", ".."):
+        raise HTTPException(status_code=400, detail="Invalid filename format")
+    resolved_base = os.path.realpath(base_dir)
+    target_path = os.path.realpath(os.path.join(resolved_base, clean_name))
+    if not (target_path.startswith(resolved_base + os.sep) or target_path == resolved_base):
+        raise HTTPException(status_code=400, detail="Path traversal forbidden")
+    return target_path
+
+def verify_loopback_request(request: Request):
+    """Ensures caller is strictly local machine loopback."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+        raise HTTPException(status_code=403, detail="Remote network access forbidden. Local loopback only.")
+
 # Asynchronous Tasks & Thread Locks
 EXPORT_TASKS: Dict[str, Dict[str, Any]] = {}
 TRANSCRIBE_JOBS: Dict[str, Dict[str, Any]] = {}
@@ -120,16 +159,11 @@ VIRAL_KEYWORDS = {
     "system", "fast", "simple", "easy", "step", "first", "millionaire", "results"
 }
 
-# Default Master Groq Keys (embedded fallback ensures 100% out-of-the-box functionality)
-DEFAULT_MASTER_KEYS = [
-    "".join(chr(c) for c in [103, 115, 107, 95, 79, 67, 66, 99, 72, 82, 48, 72, 87, 78, 110, 100, 50, 89, 105, 102, 89, 114, 83, 87, 87, 71, 100, 121, 98, 51, 70, 89, 90, 98, 51, 101, 50, 107, 115, 103, 122, 108, 106, 118, 113, 121, 89, 112, 76, 98, 66, 108, 79, 70, 115, 122])
-]
-
 # Whisper Model Cache
 WHISPER_MODELS: Dict[str, Any] = {}
 
 def get_master_groq_keys() -> List[str]:
-    """Reads Master Groq API Keys from .env or environment variables with embedded fallback."""
+    """Reads Groq API Keys from .env or environment variables."""
     keys = []
     if os.path.exists(ENV_FILE):
         try:
@@ -156,15 +190,10 @@ def get_master_groq_keys() -> List[str]:
             if len(clean_k) > 10:
                 keys.append(clean_k)
 
-    # Always ensure embedded master keys are present
-    for k in DEFAULT_MASTER_KEYS:
-        if k and len(k) > 10:
-            keys.append(k)
-
     return list(dict.fromkeys(keys))
 
 def save_master_groq_key(new_key: str):
-    """Appends or updates Master Groq Key in .env."""
+    """Appends or updates Master Groq Key in .env while preserving all other configuration keys."""
     clean_k = new_key.strip()
     if not clean_k:
         return
@@ -172,8 +201,41 @@ def save_master_groq_key(new_key: str):
     if clean_k not in existing:
         existing.append(clean_k)
     joined = ",".join(existing)
-    with open(ENV_FILE, "w", encoding="utf-8") as f:
-        f.write(f"# CapShorts Master Cloud Keys\nGROQ_API_KEYS={joined}\n")
+
+    lines = []
+    found_key = False
+    if os.path.exists(ENV_FILE):
+        try:
+            with open(ENV_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("GROQ_API_KEYS="):
+                        lines.append(f"GROQ_API_KEYS={joined}\n")
+                        found_key = True
+                    elif line.startswith("GROQ_API_KEY="):
+                        continue
+                    else:
+                        lines.append(line)
+        except Exception:
+            pass
+
+    if not found_key:
+        lines.append(f"GROQ_API_KEYS={joined}\n")
+
+    temp_env = f"{ENV_FILE}.tmp_{uuid.uuid4().hex[:8]}"
+    try:
+        with open(temp_env, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+        try:
+            os.chmod(temp_env, 0o600)
+        except Exception:
+            pass
+        os.replace(temp_env, ENV_FILE)
+    finally:
+        if os.path.exists(temp_env):
+            try:
+                os.remove(temp_env)
+            except Exception:
+                pass
 
 def check_ffmpeg() -> bool:
     """Checks whether ffmpeg executable is available in PATH or local directory."""
@@ -361,55 +423,55 @@ def run_transcribe_job(
                 "status": "processing"
             }
             audio_mp3 = os.path.join(TEMP_DIR, f"audio_turbo_{task_id}.mp3")
+            try:
+                trim_args = []
+                if range_mode == "short_60s":
+                    trim_args = ["-t", "60"]
+                elif range_mode == "short_180s":
+                    trim_args = ["-t", "180"]
 
-            trim_args = []
-            if range_mode == "short_60s":
-                trim_args = ["-t", "60"]
-            elif range_mode == "short_180s":
-                trim_args = ["-t", "180"]
+                cmd = [
+                    ffmpeg_bin, "-y", "-i", target_video
+                ] + trim_args + [
+                    "-vn", "-ar", "16000", "-ac", "1", "-b:a", "32k",
+                    audio_mp3
+                ]
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, **SUBPROCESS_EXTRA_KWARGS)
 
-            cmd = [
-                ffmpeg_bin, "-y", "-i", target_video
-            ] + trim_args + [
-                "-vn", "-ar", "16000", "-ac", "1", "-b:a", "32k",
-                audio_mp3
-            ]
-            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **SUBPROCESS_EXTRA_KWARGS)
+                TRANSCRIBE_JOBS[task_id] = {
+                    "progress": 55,
+                    "step": f"⚡ Turbo Mode: Running Groq Whisper Large-v3 ({len(key_pool)} key pool active)...",
+                    "status": "processing"
+                }
 
-            TRANSCRIBE_JOBS[task_id] = {
-                "progress": 55,
-                "step": f"⚡ Turbo Mode: Running Groq Whisper Large-v3 ({len(key_pool)} key pool active)...",
-                "status": "processing"
-            }
+                words_result, dur = transcribe_with_groq_pool(audio_mp3, key_pool, language)
+                words_result = tag_keywords(words_result)
 
-            words_result, dur = transcribe_with_groq_pool(audio_mp3, key_pool, language)
-            words_result = tag_keywords(words_result)
+                TRANSCRIBE_JOBS[task_id] = {
+                    "progress": 90,
+                    "step": "⚡ Generating viral shorts & highlight clips...",
+                    "status": "processing"
+                }
 
-            TRANSCRIBE_JOBS[task_id] = {
-                "progress": 90,
-                "step": "⚡ Generating viral shorts & highlight clips...",
-                "status": "processing"
-            }
+                video_dur = dur if dur > 0 else (words_result[-1]["end"] if words_result else 60.0)
+                clips_result = detect_viral_clips(words_result, video_dur)
 
-            video_dur = dur if dur > 0 else (words_result[-1]["end"] if words_result else 60.0)
-            clips_result = detect_viral_clips(words_result, video_dur)
-
-            if os.path.exists(audio_mp3):
-                try:
-                    os.remove(audio_mp3)
-                except Exception:
-                    pass
-
-            TRANSCRIBE_JOBS[task_id] = {
-                "progress": 100,
-                "step": f"Complete in ~4s! Extracted {len(words_result)} words and {len(clips_result)} viral clips.",
-                "status": "completed",
-                "words": words_result,
-                "clips": clips_result,
-                "duration": video_dur,
-                "video_path": target_video
-            }
-            return
+                TRANSCRIBE_JOBS[task_id] = {
+                    "progress": 100,
+                    "step": f"Complete in ~4s! Extracted {len(words_result)} words and {len(clips_result)} viral clips.",
+                    "status": "completed",
+                    "words": words_result,
+                    "clips": clips_result,
+                    "duration": video_dur,
+                    "video_path": target_video
+                }
+                return
+            finally:
+                if os.path.exists(audio_mp3):
+                    try:
+                        os.remove(audio_mp3)
+                    except Exception:
+                        pass
 
         except Exception as e:
             print(f"[engine] Cloud Turbo pool exhausted, falling back to local CPU: {e}")
@@ -442,7 +504,7 @@ def run_transcribe_job(
                     "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
                     audio_wav
                 ]
-                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **SUBPROCESS_EXTRA_KWARGS)
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, **SUBPROCESS_EXTRA_KWARGS)
             else:
                 audio_wav = target_video
 
@@ -524,12 +586,6 @@ def run_transcribe_job(
             video_duration = words_result[-1]["end"] if words_result else (audio_duration or 60.0)
             clips_result = detect_viral_clips(words_result, video_duration)
 
-            if os.path.exists(audio_wav) and audio_wav != target_video:
-                try:
-                    os.remove(audio_wav)
-                except Exception:
-                    pass
-
             TRANSCRIBE_JOBS[task_id] = {
                 "progress": 100,
                 "step": f"Complete! Extracted {len(words_result)} words and {len(clips_result)} viral clips.",
@@ -554,6 +610,12 @@ def run_transcribe_job(
                 "words": [],
                 "clips": []
             }
+        finally:
+            if audio_wav and os.path.exists(audio_wav) and audio_wav != target_video:
+                try:
+                    os.remove(audio_wav)
+                except Exception:
+                    pass
 
 @app.post("/api/transcribe")
 async def start_transcription(
@@ -631,7 +693,7 @@ def get_transcribe_progress(task_id: str):
 class MasterKeyPayload(BaseModel):
     key: str
 
-@app.post("/api/settings/master-key")
+@app.post("/api/settings/master-key", dependencies=[Depends(verify_loopback_request)])
 def save_master_key_api(payload: MasterKeyPayload):
     """Saves a new Master Groq Key to the server's .env pool."""
     save_master_groq_key(payload.key)
@@ -681,9 +743,10 @@ def generate_demo_transcript() -> List[Dict[str, Any]]:
     return tag_keywords(result)
 
 @app.get("/api/broll/search")
-def broll_search(keyword: str, api_key: Optional[str] = None):
+def broll_search(keyword: str, api_key: Optional[str] = None, x_pexels_key: Optional[str] = Header(None)):
     """Searches vertical stock video clips matching keyword."""
-    clips = search_pexels_videos(keyword, api_key=api_key)
+    effective_key = x_pexels_key or api_key
+    clips = search_pexels_videos(keyword, api_key=effective_key)
     return {"results": clips}
 
 class ExportPayload(BaseModel):
@@ -701,7 +764,7 @@ class ExportPayload(BaseModel):
 def run_export_job(task_id: str, payload: ExportPayload):
     """Background task executing FFmpeg ASS subtitle burning, clip trimming, dynamic scaling, and B-roll composite."""
     EXPORT_TASKS[task_id] = {"progress": 10, "status": "Generating Subtitles (.ass)...", "error": None}
-    
+    ass_path = None
     try:
         transcript_to_use = payload.transcript
         is_clip_export = payload.clip_start is not None and payload.clip_end is not None and payload.clip_end > payload.clip_start
@@ -719,20 +782,29 @@ def run_export_job(task_id: str, payload: ExportPayload):
                     })
             transcript_to_use = shifted if shifted else payload.transcript
 
-        input_video = payload.video_path
-        output_file = os.path.join(OUTPUT_DIR, f"export_{task_id}_{payload.output_filename}")
+        safe_output_name = os.path.basename((payload.output_filename or "capshorts_export.mp4").strip().replace("\\", "/"))
+        if not safe_output_name.endswith(".mp4"):
+            safe_output_name += ".mp4"
+        output_file = get_safe_contained_path(OUTPUT_DIR, f"export_{task_id}_{safe_output_name}")
         ffmpeg_bin = get_ffmpeg_bin()
 
-        if not input_video or not os.path.exists(input_video):
-            input_video = os.path.join(TEMP_DIR, f"blank_{task_id}.mp4")
-            test_cmd = [
-                ffmpeg_bin, "-y", "-f", "lavfi",
-                "-i", "color=c=0x18181b:s=1080x1920:d=8:r=30",
-                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-                "-t", "8", "-c:v", "libx264", "-c:a", "aac",
-                input_video
-            ]
-            subprocess.run(test_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # Resolve input video safely
+        resolved_input = None
+        if payload.video_path:
+            if os.path.isabs(payload.video_path) and os.path.exists(payload.video_path):
+                resolved_input = payload.video_path
+            else:
+                clean_in = os.path.basename(payload.video_path.strip().replace("\\", "/"))
+                for check_dir in [TEMP_DIR, OUTPUT_DIR]:
+                    cand = os.path.join(check_dir, clean_in)
+                    if os.path.exists(cand):
+                        resolved_input = cand
+                        break
+
+        if not resolved_input or not os.path.exists(resolved_input):
+            raise FileNotFoundError(f"Input video file was not found or is inaccessible: {payload.video_path}")
+
+        input_video = resolved_input
 
         # Probe input video dimensions
         in_w, in_h = probe_video_dimensions(input_video) if os.path.exists(input_video) else (1080, 1920)
@@ -839,7 +911,11 @@ def run_export_job(task_id: str, payload: ExportPayload):
                 ]
 
         if check_ffmpeg():
-            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **SUBPROCESS_EXTRA_KWARGS)
+            try:
+                proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300, **SUBPROCESS_EXTRA_KWARGS)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("FFmpeg video render timed out after 300 seconds.")
+
             if proc.returncode != 0:
                 print(f"[export] FFmpeg error ({hw_encoder_name}): {proc.stderr.decode('utf-8', errors='ignore')}")
                 # Fallback to software libx264 if hardware encoder fails during render
@@ -851,7 +927,11 @@ def run_export_job(task_id: str, payload: ExportPayload):
                 else:
                     fb_cmd += ["-vf", f"ass='{escaped_ass}'"]
                 fb_cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-c:a", "aac", output_file]
-                proc2 = subprocess.run(fb_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **SUBPROCESS_EXTRA_KWARGS)
+                try:
+                    proc2 = subprocess.run(fb_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300, **SUBPROCESS_EXTRA_KWARGS)
+                except subprocess.TimeoutExpired:
+                    raise RuntimeError("FFmpeg software fallback timed out after 300 seconds.")
+
                 if proc2.returncode != 0:
                     raise RuntimeError("FFmpeg render failed on both hardware and software encoders.")
         else:
@@ -875,15 +955,21 @@ def run_export_job(task_id: str, payload: ExportPayload):
             "status": f"Export Error: {str(e)}",
             "error": str(e)
         }
+    finally:
+        if ass_path and os.path.exists(ass_path):
+            try:
+                os.remove(ass_path)
+            except Exception:
+                pass
 
 @app.get("/api/download/{filename}")
 def download_exported_file(filename: str):
     """Serves the rendered MP4 video file directly for download or preview."""
-    safe_name = os.path.basename(filename)
-    target_path = os.path.join(OUTPUT_DIR, safe_name)
+    target_path = get_safe_contained_path(OUTPUT_DIR, filename)
     if not os.path.exists(target_path):
-        raise HTTPException(status_code=404, detail=f"Exported video file not found: {safe_name}")
+        raise HTTPException(status_code=404, detail="Exported video file not found")
     
+    safe_name = os.path.basename(target_path)
     return FileResponse(
         path=target_path,
         media_type="video/mp4",
@@ -903,24 +989,17 @@ def convert_script(payload: ScriptConvertPayload):
     return {"words": payload.words}
 
 def resolve_video_file(path: Optional[str]) -> str:
-    """Helper to resolve a video file path across absolute, TEMP_DIR, and fallback locations."""
-    if path and os.path.exists(path):
+    """Helper to resolve a video file path safely within approved directories."""
+    if not path or not isinstance(path, str):
+        raise HTTPException(status_code=400, detail="Missing video path")
+    if os.path.isabs(path) and os.path.exists(path):
         return path
-    if path:
-        cand = os.path.join(TEMP_DIR, os.path.basename(path))
+    clean_name = os.path.basename(path.strip().replace("\\", "/"))
+    for d in [TEMP_DIR, OUTPUT_DIR]:
+        cand = os.path.join(d, clean_name)
         if os.path.exists(cand):
             return cand
-    # Fallback: look for the latest video file in TEMP_DIR
-    if os.path.exists(TEMP_DIR):
-        files = [
-            os.path.join(TEMP_DIR, f)
-            for f in os.listdir(TEMP_DIR)
-            if f.lower().endswith((".mp4", ".mov", ".mkv", ".webm", ".avi"))
-        ]
-        if files:
-            files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-            return files[0]
-    raise HTTPException(status_code=404, detail=f"Video file not found: {path}")
+    raise HTTPException(status_code=404, detail="Video file not found")
 
 class SilenceDetectPayload(BaseModel):
     video_path: Optional[str] = None
@@ -1008,10 +1087,10 @@ def split_video_segments(payload: VideoSplitPayload):
     ffmpeg_bin = get_ffmpeg_bin()
     video_file = resolve_video_file(payload.video_path)
 
-    out_name = payload.output_filename or f"split_{uuid.uuid4().hex[:8]}.mp4"
-    if not out_name.endswith(".mp4"):
-        out_name += ".mp4"
-    out_path = os.path.join(OUTPUT_DIR, out_name)
+    safe_out_name = os.path.basename((payload.output_filename or f"split_{uuid.uuid4().hex[:8]}.mp4").strip().replace("\\", "/"))
+    if not safe_out_name.endswith(".mp4"):
+        safe_out_name += ".mp4"
+    out_path = get_safe_contained_path(OUTPUT_DIR, safe_out_name)
 
     try:
         # Case 1: Single segment trim (instant -c copy)
@@ -1109,14 +1188,6 @@ def get_export_progress(task_id: str):
     if task_id not in EXPORT_TASKS:
         raise HTTPException(status_code=404, detail="Task not found")
     return EXPORT_TASKS[task_id]
-
-@app.get("/api/download/{filename}")
-def download_file(filename: str):
-    """Serves the rendered video file."""
-    path = os.path.join(OUTPUT_DIR, filename)
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, media_type="video/mp4", filename=filename)
 
 class SubtitleExportPayload(BaseModel):
     transcript: List[Dict[str, Any]]
@@ -1237,9 +1308,15 @@ def get_update_status():
         "release_url": "https://github.com/thealiraza2/CapShorts/releases/latest"
     }
 
-@app.post("/api/system/apply-update")
+@app.post("/api/system/apply-update", dependencies=[Depends(verify_loopback_request)])
 def apply_update():
     """Pulls latest updates from GitHub or returns direct package upgrade links."""
+    if getattr(sys, "frozen", False):
+        return {
+            "success": True,
+            "message": "Packaged desktop build detected. Please upgrade using the official installer release.",
+            "release_url": "https://github.com/thealiraza2/CapShorts/releases/latest"
+        }
     try:
         project_root = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))
         if not os.path.exists(os.path.join(project_root, ".git")):

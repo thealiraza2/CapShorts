@@ -16,6 +16,7 @@ import {
 import { useShallow } from 'zustand/react/shallow';
 import { useVideoStore } from '../../store/useVideoStore';
 import { AspectRatio } from '../../types';
+import { apiUrl } from '../../config';
 
 export const CapCutHeader: React.FC = () => {
   const {
@@ -49,7 +50,7 @@ export const CapCutHeader: React.FC = () => {
   const [tempTitle, setTempTitle] = useState(projectTitle);
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/system/update-status')
+    fetch(apiUrl('/api/system/update-status'))
       .then((res) => res.json())
       .then((data) => {
         if (data?.update_available) setHasUpdate(true);
@@ -148,16 +149,18 @@ export const CapCutHeader: React.FC = () => {
         </div>
 
         {/* Undo / Redo controls */}
-        <div className="flex items-center space-x-0.5 bg-zinc-900/70 border border-white/[0.06] rounded-lg p-0.5">
+        <div className="flex items-center space-x-0.5 bg-zinc-900/70 border border-white/[0.06] rounded-lg p-0.5 opacity-50 cursor-not-allowed" title="History undo/redo is coming in next release">
           <button
-            className="p-1 rounded-md hover:bg-white/[0.08] text-zinc-400 hover:text-zinc-200 transition-colors"
-            title="Undo (Ctrl+Z)"
+            disabled
+            className="p-1 rounded-md text-zinc-500 cursor-not-allowed"
+            title="Undo (History stack disabled)"
           >
             <Undo2 className="w-3.5 h-3.5" />
           </button>
           <button
-            className="p-1 rounded-md hover:bg-white/[0.08] text-zinc-400 hover:text-zinc-200 transition-colors"
-            title="Redo (Ctrl+Y)"
+            disabled
+            className="p-1 rounded-md text-zinc-500 cursor-not-allowed"
+            title="Redo (History stack disabled)"
           >
             <Redo2 className="w-3.5 h-3.5" />
           </button>
@@ -206,12 +209,23 @@ export const CapCutHeader: React.FC = () => {
 
       {/* Right: Engine Status & Apple-Grade Export Button */}
       <div className="flex items-center space-x-2.5">
-        {/* Clean System Status Pill */}
-        <div className="hidden sm:flex items-center space-x-2 text-xs bg-zinc-900/80 border border-white/[0.06] px-3 py-1 rounded-full text-zinc-300 shadow-xs">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.7)] animate-pulse"></span>
-          <span className="font-semibold text-zinc-200">Local AI Active</span>
-          <span className="text-zinc-600">·</span>
-          <span className="text-[11px] font-medium text-indigo-300">GPU Accelerated</span>
+        {/* Dynamic System Status Pill */}
+        <div className="hidden sm:flex items-center space-x-2 text-xs bg-zinc-900/80 border border-white/[0.06] px-3 py-1 rounded-full text-zinc-300 shadow-sm">
+          {engineHealth?.status === 'online' ? (
+            <>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.7)] animate-pulse"></span>
+              <span className="font-semibold text-zinc-200">AI Engine Online</span>
+              <span className="text-zinc-600">·</span>
+              <span className="text-[11px] font-medium text-indigo-300">
+                {engineHealth?.cuda_available ? 'GPU Accelerated' : 'CPU Mode'}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="w-2 h-2 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.7)]"></span>
+              <span className="font-semibold text-rose-300">AI Engine Offline</span>
+            </>
+          )}
         </div>
 
         {/* Replace/New Video */}

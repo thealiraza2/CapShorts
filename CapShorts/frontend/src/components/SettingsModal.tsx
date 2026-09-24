@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Settings,
@@ -15,6 +15,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { useVideoStore } from '../store/useVideoStore';
+import { apiUrl } from '../config';
 
 export const SettingsModal: React.FC = () => {
   const {
@@ -29,6 +30,12 @@ export const SettingsModal: React.FC = () => {
 
   const [activeSettingsTab, setActiveSettingsTab] = useState<'ai' | 'hardware' | 'broll' | 'privacy' | 'updates'>('ai');
   const [tempGroqKey, setTempGroqKey] = useState(groqApiKey);
+
+  useEffect(() => {
+    if (isSettingsModalOpen) {
+      setTempGroqKey(groqApiKey);
+    }
+  }, [isSettingsModalOpen, groqApiKey]);
   const [pexelsKey, setPexelsKey] = useState(() => localStorage.getItem('capshorts_pexels_key') || localStorage.getItem('opencaption_pexels_key') || '');
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
@@ -40,7 +47,7 @@ export const SettingsModal: React.FC = () => {
 
   const fetchTelemetrySettings = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/system/telemetry-settings');
+      const res = await fetch(apiUrl('/api/system/telemetry-settings'));
       if (res.ok) {
         const data = await res.json();
         setTelemetryEnabled(data.enabled !== false);
@@ -56,7 +63,7 @@ export const SettingsModal: React.FC = () => {
     setTelemetryEnabled(enabled);
     setIsUpdatingTelemetry(true);
     try {
-      await fetch('http://127.0.0.1:8000/api/system/telemetry-settings', {
+      await fetch(apiUrl('/api/system/telemetry-settings'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled })
@@ -91,7 +98,7 @@ export const SettingsModal: React.FC = () => {
     setIsCheckingUpdate(true);
     setUpdateStatusMessage(null);
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/system/update-status');
+      const res = await fetch(apiUrl('/api/system/update-status'));
       if (res.ok) {
         const data = await res.json();
         setUpdateInfo(data);
@@ -109,7 +116,7 @@ export const SettingsModal: React.FC = () => {
     setIsApplyingUpdate(true);
     setUpdateStatusMessage('Pulling latest code from GitHub...');
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/system/apply-update', { method: 'POST' });
+      const res = await fetch(apiUrl('/api/system/apply-update'), { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         setUpdateStatusMessage(data.message || 'Update applied successfully! Reloading studio in 3 seconds...');

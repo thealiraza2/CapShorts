@@ -167,6 +167,21 @@ export const CanvasPreview: React.FC = () => {
     }
   };
 
+  // Synchronize native video element playback whenever isPlaying store state changes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (isPlaying) {
+      if (video.paused) {
+        video.play().catch(e => console.warn('Play prevented:', e));
+      }
+    } else {
+      if (!video.paused) {
+        video.pause();
+      }
+    }
+  }, [isPlaying]);
+
   // High-Precision 60 FPS / 120 FPS Playback Loop (Smooth liquid playhead)
   useEffect(() => {
     if (!isPlaying) return;
@@ -327,7 +342,10 @@ export const CanvasPreview: React.FC = () => {
     const delta = frames / fps;
     const newTime = Math.max(0, Math.min(duration, currentTime + delta));
     setCurrentTime(newTime);
-    if (videoRef.current) videoRef.current.currentTime = newTime;
+    if (videoRef.current) {
+      const sourceTime = timelineToSourceTime(newTime, videoSegments);
+      videoRef.current.currentTime = sourceTime;
+    }
   };
 
   return (
@@ -493,14 +511,25 @@ export const CanvasPreview: React.FC = () => {
 
             {/* Live B-Roll Overlay (if active at currentTime) */}
             {activeBroll && (
-              <div className="absolute inset-0 z-20 animate-fade pointer-events-none">
-                <video
-                  src={activeBroll.video_url || activeBroll.preview_url}
-                  autoPlay
-                  loop
-                  muted
-                  className="w-full h-full object-cover"
-                />
+              <div key={activeBroll.id} className="absolute inset-0 z-20 animate-fade pointer-events-none">
+                {activeBroll.video_url ? (
+                  <video
+                    key={activeBroll.id}
+                    src={activeBroll.video_url}
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    className="w-full h-full object-cover"
+                  />
+                ) : activeBroll.preview_url ? (
+                  <img
+                    key={activeBroll.id}
+                    src={activeBroll.preview_url}
+                    alt={activeBroll.title || 'B-Roll Preview'}
+                    className="w-full h-full object-cover"
+                  />
+                ) : null}
                 <div className="absolute top-3 left-3 bg-black/80 backdrop-blur-md px-2 py-0.5 rounded text-[10px] text-amber-400 font-bold uppercase tracking-wider border border-amber-500/30">
                   B-Roll: {activeBroll.keyword}
                 </div>

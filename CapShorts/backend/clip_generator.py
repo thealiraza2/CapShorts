@@ -150,6 +150,8 @@ def generate_clip_title(clip_words: List[Dict[str, Any]], index: int) -> str:
 
     return VIRAL_TITLE_TEMPLATES[index % len(VIRAL_TITLE_TEMPLATES)]
 
+MAX_TRANSCRIPT_WORDS = 15000
+
 def detect_viral_clips(
     words: List[Dict[str, Any]],
     total_duration: float,
@@ -161,15 +163,22 @@ def detect_viral_clips(
     Scans word transcript with millisecond accuracy, detects natural sentence boundaries,
     and extracts complete, self-contained viral shorts without cutting off mid-sentence.
     """
-    if not words or total_duration < 15.0:
+    if not words or total_duration <= 0:
+        return []
+
+    words = words[:MAX_TRANSCRIPT_WORDS]
+    if words and total_duration < words[-1].get("end", 0.0):
+        total_duration = float(words[-1].get("end", 0.0))
+
+    if total_duration < 15.0 or len(words) < 10:
         return [{
             "id": f"clip-1-{str(uuid.uuid4())[:6]}",
             "title": "⚡ Viral Short Preview",
-            "hook": " ".join(w["word"] for w in words[:10]) + "..." if words else "Full Video",
+            "hook": " ".join(w["word"] for w in words[:10]) + ("..." if len(words) > 10 else ""),
             "start": 0.0,
-            "end": max(words[-1]["end"] if words else 5.0, total_duration),
-            "duration": round(total_duration, 1),
-            "virality_score": 96,
+            "end": round(total_duration, 2),
+            "duration": max(0.1, round(total_duration, 1)),
+            "virality_score": 75,
             "keywords": [w["word"] for w in words if w.get("keyword")][:5],
             "transcript_snippet": " ".join(w["word"] for w in words[:25]) + ("..." if len(words) > 25 else "")
         }]
@@ -207,7 +216,7 @@ def detect_viral_clips(
                         gap = max(0.0, next_w["start"] - w_end["end"])
                         padding = min(padding, max(0.0, gap - 0.08))
                     actual_end = min(total_duration, w_end["end"] + padding)
-                    actual_dur = round(actual_end - start_time, 1)
+                    actual_dur = max(0.1, round(actual_end - start_time, 1))
 
                     c_words = words[start_idx : end_idx + 1]
                     hook = c_words[:10]
@@ -218,7 +227,7 @@ def detect_viral_clips(
                     kw_score = min(28.0, (kw_count / max(1, len(c_words))) * 140.0)
 
                     # Speech pacing score (optimal 130-180 WPM)
-                    wpm = (len(c_words) / actual_dur) * 60.0
+                    wpm = (len(c_words) / max(0.1, actual_dur)) * 60.0
                     pacing_score = 18.0 if 120 <= wpm <= 190 else 8.0
 
                     # Bonus for crisp terminal punctuation
@@ -226,8 +235,7 @@ def detect_viral_clips(
                     has_punct = any(p in raw_end for p in [".", "!", "?", "।", "؟"])
                     punct_bonus = 12.0 if has_punct else (8.0 if clean_word(raw_end) in TERMINAL_VERBS_URDU_HINDI else 4.0)
 
-                    total_virality = min(99, int(round((h_score * 0.42) + kw_score + pacing_score + punct_bonus + 10.0)))
-                    total_virality = max(82, min(99, total_virality))
+                    total_virality = min(99, max(1, int(round((h_score * 0.42) + kw_score + pacing_score + punct_bonus + 10.0))))
 
                     candidates.append({
                         "start": round(start_time, 2),
@@ -252,7 +260,7 @@ def detect_viral_clips(
                     "duration": round(t_end - t, 1),
                     "words": c_words,
                     "hook_words": c_words[:8],
-                    "virality_score": 85 + (len(candidates) % 10)
+                    "virality_score": 70 + (len(candidates) % 15)
                 })
             t += (step * 0.8)
 

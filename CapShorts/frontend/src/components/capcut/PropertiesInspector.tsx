@@ -404,7 +404,7 @@ export const PropertiesInspector: React.FC = () => {
                 <div>
                   <div className="text-[11px] font-bold text-zinc-200 flex items-center space-x-1.5">
                     <span>✨ AI Animated Emojis</span>
-                    <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-indigo-500/20 text-indigo-300 font-mono font-semibold">Submagic</span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-mono font-semibold">Submagic</span>
                   </div>
                   <p className="text-[9px] text-zinc-400 mt-0.5">Pop 3D emojis automatically on viral keywords</p>
                 </div>
@@ -452,11 +452,11 @@ export const PropertiesInspector: React.FC = () => {
                   {(['top', 'middle', 'bottom'] as const).map(pos => (
                     <button
                       key={pos}
-                      onClick={() => updateCustomStyle({ position: `bottom-center` as any })}
+                      onClick={() => updateCustomStyle({ position: `${pos}-center` as SubtitlePreset['position'] })}
                       className={`py-1.5 rounded-lg text-[10px] font-semibold capitalize transition-all ${
                         activePreset.position.includes(pos)
-                          ? 'bg-indigo-600 text-white font-bold shadow-xs'
-                          : 'text-zinc-400 hover:text-white hover:bg-white/[0.04]'
+                          ? 'bg-indigo-600 text-white font-bold shadow-sm'
+                          : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04]'
                       }`}
                     >
                       {pos}

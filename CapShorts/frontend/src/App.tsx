@@ -55,12 +55,12 @@ export const App: React.FC = () => {
         }
       } catch (err) {
         setEngineHealth({
-          status: 'online',
-          device: 'Groq Cloud Turbo + CTranslate2',
+          status: 'offline',
+          device: 'Offline (AI engine not reachable)',
           cuda_available: false,
-          whisper_available: true,
-          ffmpeg_available: true,
-          active_models: ['whisper-large-v3-turbo', 'base']
+          whisper_available: false,
+          ffmpeg_available: false,
+          active_models: []
         });
       }
     };
@@ -72,9 +72,15 @@ export const App: React.FC = () => {
 
   // Global Keyboard Shortcuts (Space: Play/Pause, Ctrl+B: Split, Del: Delete, N: Snap)
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    // If typing inside an input or textarea, don't trigger shortcuts
+    // If typing inside an input, textarea, select, button, or contentEditable, don't trigger shortcuts
     const target = e.target as HTMLElement;
-    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+    if (
+      target.tagName === 'INPUT' ||
+      target.tagName === 'TEXTAREA' ||
+      target.tagName === 'SELECT' ||
+      target.tagName === 'BUTTON' ||
+      target.isContentEditable
+    ) {
       return;
     }
 

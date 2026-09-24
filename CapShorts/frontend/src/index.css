@@ -71,11 +71,11 @@
 /* Custom font fallback styles */
 @font-face {
   font-family: 'Komika Axis';
-  src: local('Komika Axis'), local('Impact'), sans-serif;
+  src: local('Komika Axis'), local('Impact');
 }
 @font-face {
   font-family: 'The Bold Font';
-  src: local('The Bold Font'), local('Impact'), sans-serif;
+  src: local('The Bold Font'), local('Impact');
 }
 
 /* Submagic-Style High-Impact Pop & Bounce Keyframe for Viral Emojis */

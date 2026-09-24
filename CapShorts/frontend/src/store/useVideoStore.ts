@@ -44,6 +44,7 @@ interface VideoStoreState {
   isScrubbing: boolean;
   activeTab: 'presets' | 'broll' | 'clips' | 'inspector';
   exportSettings: ExportSettings;
+  silenceBackup: { transcript: WordToken[]; duration: number; videoSegments: VideoSegment[] } | null;
 
   setIsSettingsModalOpen: (open: boolean) => void;
   setIsScrubbing: (scrubbing: boolean) => void;
@@ -243,14 +244,31 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
     crf: 18,
     outputFormat: 'mp4'
   },
+  silenceBackup: null,
 
   setVideo: (file, url, name) => {
+    const prevUrl = get().videoUrl;
+    if (prevUrl && prevUrl.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(prevUrl);
+      } catch {
+        // ignore
+      }
+    }
     const vName = name || (file ? file.name : 'Untitled Video');
     const curDur = get().duration || 10;
     set({
       videoFile: file,
       videoUrl: url,
       videoName: vName,
+      serverVideoPath: null,
+      exportResultUrl: null,
+      exportProgress: 0,
+      exportStatus: 'Idle',
+      brollList: [],
+      silenceRegions: [],
+      removedSilenceDuration: 0,
+      silenceBackup: null,
       currentTime: 0,
       isPlaying: false,
       transcript: [],
@@ -336,8 +354,7 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
     if (clip) {
       return {
         selectedClipId: id,
-        currentTime: clip.start,
-        aspectRatio: '9:16'
+        currentTime: clip.start
       };
     }
     return { selectedClipId: id };
@@ -490,6 +507,13 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
             console.warn("Transcription polling tick error:", err);
           }
         }, 500);
+      } else {
+        set({
+          isTranscribing: false,
+          transcribeProgress: 0,
+          transcribingStep: '',
+          transcribeError: 'Unexpected response format from AI transcription engine.'
+        });
       }
     } catch (err: any) {
       console.warn("Transcription failed:", err);
@@ -585,7 +609,7 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
         duration: Number((time - target.start).toFixed(2)),
         sourceEnd: Number((target.sourceStart + splitOffset).toFixed(2))
       };
-      const part2Id = `seg-${Date.now()}`;
+      const part2Id = `seg-${Math.random().toString(36).substring(2, 9)}`;
       const part2: VideoSegment = {
         id: part2Id,
         name: `${baseName} (Part 2)`,
@@ -596,14 +620,6 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
         duration: Number((target.end - time).toFixed(2))
       };
       newSegments.splice(segIdx, 1, part1, part2);
-
-      // Renumber all segments cleanly: Clip (Part 1), Clip (Part 2)...
-      let partCounter = 1;
-      newSegments = newSegments.map(s => ({
-        ...s,
-        name: `${s.name.replace(/\s*\(Part\s*\d+\)/, '')} (Part ${partCounter++})`
-      }));
-
       newlyCreatedId = part2Id;
       newlyCreatedType = 'video';
     }
@@ -614,8 +630,15 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
       if (wordIdx !== -1) {
         const targetWord = newTranscript[wordIdx];
         if (time - targetWord.start > 0.12 && targetWord.end - time > 0.12) {
-          const p1 = { ...targetWord, id: `w-split-1-${Date.now()}`, end: Number(time.toFixed(2)) };
-          const p2 = { ...targetWord, id: `w-split-2-${Date.now()}`, start: Number(time.toFixed(2)) };
+          const randSuffix = Math.random().toString(36).substring(2, 8);
+          const totalDur = Math.max(0.01, targetWord.end - targetWord.start);
+          const ratio = Math.max(0.2, Math.min(0.8, (time - targetWord.start) / totalDur));
+          const splitChar = Math.max(1, Math.min(targetWord.word.length - 1, Math.round(targetWord.word.length * ratio)));
+          const w1 = targetWord.word.slice(0, splitChar);
+          const w2 = targetWord.word.slice(splitChar);
+
+          const p1 = { ...targetWord, id: `w-${randSuffix}-1`, word: w1, end: Number(time.toFixed(2)) };
+          const p2 = { ...targetWord, id: `w-${randSuffix}-2`, word: w2, start: Number(time.toFixed(2)) };
           newTranscript.splice(wordIdx, 1, p1, p2);
           if (targetType === 'subtitle') {
             newlyCreatedId = p2.id;
@@ -712,9 +735,13 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
         const data = await res.json();
         const regions: Array<{ start: number; end: number; duration: number }> = data.silence_regions || [];
         if (regions.length > 0) {
-          (get() as any)._backupTranscript = [...transcript];
-          (get() as any)._backupDuration = duration;
-          (get() as any)._backupVideoSegments = [...videoSegments];
+          set({
+            silenceBackup: {
+              transcript: [...transcript],
+              duration,
+              videoSegments: [...videoSegments]
+            }
+          });
 
           // 1. Compute non-silent speech segments (ripple cuts)
           const speechChunks: Array<{ start: number; end: number }> = [];
@@ -789,20 +816,16 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
   },
 
   undoSilenceRemoval: () => {
-    const backup = (get() as any)._backupTranscript;
-    const backupDur = (get() as any)._backupDuration;
-    const backupSegs = (get() as any)._backupVideoSegments;
+    const backup = get().silenceBackup;
     if (backup) {
       set({
-        transcript: backup,
-        videoSegments: backupSegs || get().videoSegments,
+        transcript: backup.transcript,
+        videoSegments: backup.videoSegments,
         silenceRegions: [],
         removedSilenceDuration: 0,
-        duration: backupDur || get().duration
+        duration: backup.duration,
+        silenceBackup: null
       });
-      (get() as any)._backupTranscript = null;
-      (get() as any)._backupVideoSegments = null;
-      (get() as any)._backupDuration = null;
     }
   }
 }));

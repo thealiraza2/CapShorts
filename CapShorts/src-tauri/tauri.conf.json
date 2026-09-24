@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: blob: https:; media-src 'self' asset: data: blob: http://127.0.0.1:8000 http://localhost:8000; connect-src 'self' http://127.0.0.1:8000 http://localhost:8000 https://api.groq.com https://api.pexels.com;"
     }
   },
   "bundle": {
@@ -38,8 +38,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "binaries/**/*",
-      "binaries/*"
+      "binaries/**/*"
     ],
     "windows": {
       "nsis": {

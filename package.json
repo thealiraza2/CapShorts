@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "npm run dev --prefix CapShorts/frontend",
     "build": "npm run build --prefix CapShorts/frontend",
-    "app": "bash run.sh",
-    "desktop": "npm run app --prefix CapShorts/frontend"
+    "typecheck": "npm run typecheck --prefix CapShorts/frontend",
+    "desktop": "cargo tauri dev --manifest-path CapShorts/src-tauri/Cargo.toml"
   }
 }

@@ -41,16 +41,25 @@ def hex_to_ass_color(hex_str: str, alpha: int = 0) -> str:
     
     return "&H00FFFFFF&"
 
+def sanitize_ass_text(text: str) -> str:
+    """Strips ASS override tag delimiters and dangerous control characters to prevent tag injection."""
+    if not text:
+        return ""
+    sanitized = text.replace("{", "").replace("}", "").replace("\\", "")
+    sanitized = sanitized.replace("\r", " ").replace("\n", " ")
+    return sanitized
+
 def format_ass_time(seconds: float) -> str:
-    """Converts seconds into ASS timestamp format H:MM:SS.cs"""
+    """Converts seconds into ASS timestamp format H:MM:SS.cs with proper carry-over arithmetic."""
     if seconds < 0:
-        seconds = 0
-    hrs = int(seconds // 3600)
-    mins = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    cs = int(round((seconds - int(seconds)) * 100))
-    if cs >= 100:
-        cs = 99
+        seconds = 0.0
+    total_cs = int(round(seconds * 100))
+    cs = total_cs % 100
+    total_secs = total_cs // 100
+    secs = total_secs % 60
+    total_mins = total_secs // 60
+    mins = total_mins % 60
+    hrs = total_mins // 60
     return f"{hrs}:{mins:02d}:{secs:02d}.{cs:02d}"
 
 def apply_casing(text: str, casing: str) -> str:
@@ -184,7 +193,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 w_start = w.get("start", block_start)
                 w_end = w.get("end", w_start + 0.3)
                 duration_cs = max(5, int((w_end - w_start) * 100))
-                word_text = apply_casing(w.get("word", ""), text_casing)
+                word_text = apply_casing(sanitize_ass_text(w.get("word", "")), text_casing)
                 text_parts.append(f"{{\\k{duration_cs}}}{word_text} ")
             
             line_text = "".join(text_parts).strip()
@@ -224,7 +233,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 # Format all words in the block, highlighting the active target_word
                 line_parts = []
                 for w_idx, w in enumerate(block):
-                    cased_w = apply_casing(w.get("word", ""), text_casing)
+                    cased_w = apply_casing(sanitize_ass_text(w.get("word", "")), text_casing)
                     is_active = (w_idx == active_idx)
                     is_kw = bool(w.get("keyword", False))
                     
@@ -242,7 +251,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # Static display of the word block
             line_parts = []
             for w in block:
-                cased_w = apply_casing(w.get("word", ""), text_casing)
+                cased_w = apply_casing(sanitize_ass_text(w.get("word", "")), text_casing)
                 if w.get("keyword", False):
                     line_parts.append(f"{{\\c{highlight_color_ass}}}{cased_w}{{\\c{primary_color_ass}}}")
                 else:
@@ -259,29 +268,31 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def format_srt_time(seconds: float) -> str:
-    """Converts seconds into SRT timestamp format HH:MM:SS,mmm"""
+    """Converts seconds into SRT timestamp format HH:MM:SS,mmm with proper carry-over arithmetic."""
     if seconds < 0:
         seconds = 0.0
-    hrs = int(seconds // 3600)
-    mins = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int(round((seconds - int(seconds)) * 1000))
-    if millis >= 1000:
-        millis = 999
-    return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
+    total_ms = int(round(seconds * 1000))
+    ms = total_ms % 1000
+    total_secs = total_ms // 1000
+    secs = total_secs % 60
+    total_mins = total_secs // 60
+    mins = total_mins % 60
+    hrs = total_mins // 60
+    return f"{hrs:02d}:{mins:02d}:{secs:02d},{ms:03d}"
 
 
 def format_vtt_time(seconds: float) -> str:
-    """Converts seconds into WebVTT timestamp format HH:MM:SS.mmm"""
+    """Converts seconds into WebVTT timestamp format HH:MM:SS.mmm with proper carry-over arithmetic."""
     if seconds < 0:
         seconds = 0.0
-    hrs = int(seconds // 3600)
-    mins = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int(round((seconds - int(seconds)) * 1000))
-    if millis >= 1000:
-        millis = 999
-    return f"{hrs:02d}:{mins:02d}:{secs:02d}.{millis:03d}"
+    total_ms = int(round(seconds * 1000))
+    ms = total_ms % 1000
+    total_secs = total_ms // 1000
+    secs = total_secs % 60
+    total_mins = total_secs // 60
+    mins = total_mins % 60
+    hrs = total_mins // 60
+    return f"{hrs:02d}:{mins:02d}:{secs:02d}.{ms:03d}"
 
 
 def _chunk_transcript_into_sentences(
