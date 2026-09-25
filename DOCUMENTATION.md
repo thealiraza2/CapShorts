@@ -94,8 +94,8 @@ graph TD
 ### Pre-Packaged Native Installers (Recommended)
 Pre-built binaries bundle Python, FFmpeg, and the AI engine with **zero system dependencies**:
 
-- **Windows:** Download `CapShorts_1.1.2_x64-setup.exe` (or enterprise `.msi`) from [GitHub Releases](https://github.com/thealiraza2/CapShorts/releases/latest).
-- **macOS:** Download `CapShorts_1.1.2_universal.dmg` (supports Apple Silicon M1/M2/M3/M4 & Intel Macs).
+- **Windows:** Download `CapShorts_1.1.4_x64-setup.exe` (or enterprise `.msi`) from [GitHub Releases](https://github.com/thealiraza2/CapShorts/releases/latest).
+- **macOS:** Download `CapShorts_1.1.4_universal.dmg` (supports Apple Silicon M1/M2/M3/M4 & Intel Macs).
 
 ### Building From Source (Local Development)
 
@@ -326,7 +326,7 @@ In pre-v1.1.0 releases, a React Rules of Hooks violation in `ExportModal.tsx` co
 Get a free API key from [console.groq.com/keys](https://console.groq.com/keys) and paste it into **Settings → AI Models**. Groq provides instant speech recognition (~2 seconds for a 5-minute video) at zero cost.
 
 ### Q: Can I run CapShorts on a Mac without Rosetta?
-Yes. The macOS installer (`CapShorts_1.1.2_universal.dmg`) is compiled as a Universal 2 binary supporting both native Apple Silicon (ARM64) and Intel architectures.
+Yes. The macOS installer (`CapShorts_1.1.4_universal.dmg`) is compiled as a Universal 2 binary supporting both native Apple Silicon (ARM64) and Intel architectures.
 
 ---
 

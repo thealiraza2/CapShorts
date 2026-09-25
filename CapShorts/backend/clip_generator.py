@@ -61,16 +61,37 @@ TERMINAL_VERBS_URDU_HINDI = {
     "hoon", "hu"
 }
 
+def get_w_word(w: Any) -> str:
+    """Safely extracts the word text regardless of dict or object format."""
+    if isinstance(w, dict):
+        return str(w.get("word", "") or "")
+    return str(getattr(w, "word", "") or "")
+
+def get_w_start(w: Any) -> float:
+    if isinstance(w, dict):
+        return float(w.get("start", 0.0) or 0.0)
+    return float(getattr(w, "start", 0.0) or 0.0)
+
+def get_w_end(w: Any) -> float:
+    if isinstance(w, dict):
+        return float(w.get("end", 0.0) or 0.0)
+    return float(getattr(w, "end", 0.0) or 0.0)
+
+def get_w_keyword(w: Any) -> bool:
+    if isinstance(w, dict):
+        return bool(w.get("keyword", False))
+    return bool(getattr(w, "keyword", False))
+
 def clean_word(word_str: str) -> str:
     """Strips punctuation and whitespace for grammatical inspection."""
-    return word_str.strip().lower().strip(".,!?:;\"'()[]{}؟।")
+    return str(word_str).strip().lower().strip(".,!?:;\"'()[]{}؟।")
 
-def is_thought_ender(w_obj: Dict[str, Any], next_w_obj: Optional[Dict[str, Any]]) -> bool:
+def is_thought_ender(w_obj: Any, next_w_obj: Optional[Any]) -> bool:
     """
     Evaluates whether a word represents a definitive, complete thought/sentence ending.
     Guarantees the short does NOT cut off abruptly mid-clause.
     """
-    raw_word = str(w_obj.get("word", "")).strip()
+    raw_word = get_w_word(w_obj)
     c = clean_word(raw_word)
 
     if not c:
@@ -96,50 +117,50 @@ def is_thought_ender(w_obj: Dict[str, Any], next_w_obj: Optional[Dict[str, Any]]
     if c in TERMINAL_VERBS_URDU_HINDI:
         if next_w_obj is None:
             return True
-        pause = next_w_obj["start"] - w_obj["end"]
+        pause = get_w_start(next_w_obj) - get_w_end(w_obj)
         # If followed by even a small breath pause (>=0.28s) or next sentence starts capital
-        next_raw = str(next_w_obj.get("word", "")).strip()
+        next_raw = get_w_word(next_w_obj).strip()
         if pause >= 0.28 or (next_raw and next_raw[0].isupper()):
             return True
 
     # 3. Authentic speech pause (>= 0.55s) when not on a connector
     if next_w_obj is not None:
-        pause = next_w_obj["start"] - w_obj["end"]
+        pause = get_w_start(next_w_obj) - get_w_end(w_obj)
         if pause >= 0.55:
             return True
 
     return False
 
-def score_hook(sentence_words: List[Dict[str, Any]]) -> float:
+def score_hook(sentence_words: List[Any]) -> float:
     """Calculates curiosity and virality hook score (0 to 100) for the opening 5-10 seconds."""
     if not sentence_words:
         return 50.0
 
     score = 50.0
-    text = " ".join(clean_word(w["word"]) for w in sentence_words)
+    text = " ".join(clean_word(get_w_word(w)) for w in sentence_words)
 
     # Question hooks ("why", "how", "what if", "?")
     if any(q in text for q in ["why", "how", "what", "did you know", "is it possible", "kya", "kaise", "kyun"]):
         score += 20.0
-    if any("?" in w["word"] for w in sentence_words):
+    if any("?" in get_w_word(w) for w in sentence_words):
         score += 15.0
 
     # Viral trigger words
     for w in sentence_words:
-        clean = clean_word(w["word"])
+        clean = clean_word(get_w_word(w))
         if clean in VIRAL_HOOK_TRIGGERS:
             score += 10.0
 
     # Numbers and metrics (e.g. 10x, 100, 99%, 5 hour)
-    if any(any(c.isdigit() for c in w["word"]) for w in sentence_words):
+    if any(any(c.isdigit() for c in get_w_word(w)) for w in sentence_words):
         score += 10.0
 
     return min(100.0, score)
 
-def generate_clip_title(clip_words: List[Dict[str, Any]], index: int) -> str:
+def generate_clip_title(clip_words: List[Any], index: int) -> str:
     """Generates an engaging, clickable viral title."""
     first_words = clip_words[:12]
-    first_text = " ".join(w["word"] for w in first_words).strip(".,!?:;\"'")
+    first_text = " ".join(get_w_word(w) for w in first_words).strip(".,!?:;\"'")
 
     if 10 <= len(first_text) <= 50 and any(c.isalpha() for c in first_text):
         clean = first_text.strip()
@@ -153,7 +174,7 @@ def generate_clip_title(clip_words: List[Dict[str, Any]], index: int) -> str:
 MAX_TRANSCRIPT_WORDS = 15000
 
 def detect_viral_clips(
-    words: List[Dict[str, Any]],
+    words: List[Any],
     total_duration: float,
     min_clip_duration: float = 25.0,
     max_clip_duration: float = 60.0,
@@ -167,20 +188,20 @@ def detect_viral_clips(
         return []
 
     words = words[:MAX_TRANSCRIPT_WORDS]
-    if words and total_duration < words[-1].get("end", 0.0):
-        total_duration = float(words[-1].get("end", 0.0))
+    if words and total_duration < get_w_end(words[-1]):
+        total_duration = get_w_end(words[-1])
 
     if total_duration < 15.0 or len(words) < 10:
         return [{
             "id": f"clip-1-{str(uuid.uuid4())[:6]}",
             "title": "⚡ Viral Short Preview",
-            "hook": " ".join(w["word"] for w in words[:10]) + ("..." if len(words) > 10 else ""),
+            "hook": " ".join(get_w_word(w) for w in words[:10]) + ("..." if len(words) > 10 else ""),
             "start": 0.0,
             "end": round(total_duration, 2),
             "duration": max(0.1, round(total_duration, 1)),
             "virality_score": 75,
-            "keywords": [w["word"] for w in words if w.get("keyword")][:5],
-            "transcript_snippet": " ".join(w["word"] for w in words[:25]) + ("..." if len(words) > 25 else "")
+            "keywords": [get_w_word(w) for w in words if get_w_keyword(w)][:5],
+            "transcript_snippet": " ".join(get_w_word(w) for w in words[:25]) + ("..." if len(words) > 25 else "")
         }]
 
     # Step 1: Detect valid start positions (sentence beginnings)
@@ -190,19 +211,19 @@ def detect_viral_clips(
         next_w = words[i + 1]
         if is_thought_ender(w, next_w):
             # The next word is a clean start point if it isn't a dangling connector
-            if clean_word(next_w["word"]) not in DANGLING_CONNECTORS:
+            if clean_word(get_w_word(next_w)) not in DANGLING_CONNECTORS:
                 valid_starts.append(i + 1)
 
     # Step 2: Build candidate clip windows ending strictly on complete thoughts
     candidates = []
 
     for start_idx in valid_starts:
-        start_time = words[start_idx]["start"]
+        start_time = get_w_start(words[start_idx])
 
         for end_idx in range(start_idx + 12, len(words)):
             w_end = words[end_idx]
             next_w = words[end_idx + 1] if end_idx + 1 < len(words) else None
-            raw_dur = w_end["end"] - start_time
+            raw_dur = get_w_end(w_end) - start_time
 
             if raw_dur > max_clip_duration:
                 break
@@ -213,9 +234,9 @@ def detect_viral_clips(
                     # Acoustic decay padding so speech reverb doesn't get abruptly cut
                     padding = 0.35
                     if next_w:
-                        gap = max(0.0, next_w["start"] - w_end["end"])
+                        gap = max(0.0, get_w_start(next_w) - get_w_end(w_end))
                         padding = min(padding, max(0.0, gap - 0.08))
-                    actual_end = min(total_duration, w_end["end"] + padding)
+                    actual_end = min(total_duration, get_w_end(w_end) + padding)
                     actual_dur = max(0.1, round(actual_end - start_time, 1))
 
                     c_words = words[start_idx : end_idx + 1]
@@ -292,9 +313,9 @@ def detect_viral_clips(
     for idx, c in enumerate(selected):
         c_words = c["words"]
         title = generate_clip_title(c_words, idx)
-        hook_text = " ".join(w["word"] for w in c["hook_words"][:12])
-        keywords = list(dict.fromkeys([clean_word(w["word"]) for w in c_words if w.get("keyword")]))[:6]
-        snippet = " ".join(w["word"] for w in c_words[:28]) + ("..." if len(c_words) > 28 else "")
+        hook_text = " ".join(get_w_word(w) for w in c["hook_words"][:12])
+        keywords = list(dict.fromkeys([clean_word(get_w_word(w)) for w in c_words if get_w_keyword(w)]))[:6]
+        snippet = " ".join(get_w_word(w) for w in c_words[:28]) + ("..." if len(c_words) > 28 else "")
 
         result_clips.append({
             "id": f"clip-{idx+1}-{str(uuid.uuid4())[:6]}",

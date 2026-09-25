@@ -107,6 +107,12 @@ export const ExportModal: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (isExportModalOpen && !isExporting) {
+      setExportError(null);
+    }
+  }, [isExportModalOpen, isExporting]);
+
+  useEffect(() => {
     if (activeClip) {
       setOutputFilename(`viral_short_${Math.round(activeClip.duration)}s.mp4`);
       setResolution('1080x1920');
@@ -237,6 +243,15 @@ export const ExportModal: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+
+      if (res.status === 429) {
+        setIsExporting(false);
+        const retryAfter = res.headers.get('Retry-After') || '30';
+        const errMsg = `Render limit reached. All export slots are busy. Please wait ${retryAfter}s and retry.`;
+        setExportProgress(0, errMsg);
+        setExportError(errMsg);
+        return;
+      }
 
       if (!res.ok) {
         throw new Error(`Export request failed with code ${res.status}`);
@@ -440,18 +455,18 @@ export const ExportModal: React.FC = () => {
 
           {/* Export Error State Banner */}
           {!isExporting && exportError && (
-            <div className="p-4 bg-red-950/40 border border-red-800/60 rounded-xl flex items-center justify-between text-red-200 animate-fade">
-              <div className="flex items-center space-x-2">
+            <div className="p-4 bg-red-950/80 border border-red-500/50 rounded-xl flex items-center justify-between text-red-100 animate-fade shadow-lg shadow-red-950/50">
+              <div className="flex items-center space-x-3">
                 <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />
                 <div>
-                  <p className="font-bold text-red-300">Render Failed</p>
-                  <p className="text-[10px] text-red-400/90">{exportError}</p>
+                  <p className="font-bold text-red-200 text-sm">Render Failed</p>
+                  <p className="text-xs text-red-300 font-mono mt-0.5 select-text">{exportError}</p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={handleStartExport}
-                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-red-800 hover:bg-red-700 text-white font-semibold transition-all active:scale-95 text-xs shadow-md shadow-red-950/40"
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold transition-all active:scale-95 text-xs shadow-md shadow-red-950/40"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>Retry Render</span>

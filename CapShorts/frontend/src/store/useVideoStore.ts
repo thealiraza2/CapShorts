@@ -35,6 +35,7 @@ interface VideoStoreState {
   isTranscribing: boolean;
   transcribeProgress: number;
   transcribingStep: string;
+  transcribeTaskId: string | null;
   isExporting: boolean;
   exportProgress: number;
   exportStatus: string;
@@ -168,6 +169,7 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
 
   engineHealth: null,
   isTranscribing: false,
+  transcribeTaskId: null,
   transcribeError: null,
   clearTranscribeError: () => set({ transcribeError: null }),
 
@@ -262,6 +264,10 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
       videoUrl: url,
       videoName: vName,
       serverVideoPath: null,
+      isTranscribing: false,
+      transcribeProgress: 0,
+      transcribingStep: '',
+      transcribeTaskId: null,
       isExporting: false,
       exportResultUrl: null,
       exportProgress: 0,
@@ -450,18 +456,37 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
 
       if (data.task_id) {
         const taskId = data.task_id;
-        if (data.video_path) {
-          set({ serverVideoPath: data.video_path });
-        }
+        set({
+          transcribeTaskId: taskId,
+          ...(data.video_path ? { serverVideoPath: data.video_path } : {})
+        });
 
+        let pollAttempts = 0;
+        const maxPollAttempts = 1200; // 10 minutes maximum polling window (F-043)
         const pollTimer = setInterval(async () => {
-          if (!get().isTranscribing) {
+          if (!get().isTranscribing || get().transcribeTaskId !== taskId) {
             clearInterval(pollTimer);
+            return;
+          }
+
+          pollAttempts++;
+          if (pollAttempts > maxPollAttempts) {
+            clearInterval(pollTimer);
+            set({
+              isTranscribing: false,
+              transcribingStep: '',
+              transcribeError: 'Transcription timed out after 10 minutes. Please check your audio file.'
+            });
             return;
           }
 
           try {
             const progRes = await fetch(apiUrl(`/api/transcribe/progress/${taskId}`));
+            if (!get().isTranscribing || get().transcribeTaskId !== taskId) {
+              clearInterval(pollTimer);
+              return;
+            }
+
             if (progRes.ok) {
               const progData = await progRes.json();
               set({
@@ -487,12 +512,14 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
                     transcribeProgress: 100,
                     transcribingStep: '',
                     transcribeError: null,
+                    transcribeTaskId: null,
                   });
                 } else {
                   set({
                     isTranscribing: false,
                     transcribingStep: '',
-                    transcribeError: 'No speech detected in this audio.'
+                    transcribeError: 'No speech detected in this audio.',
+                    transcribeTaskId: null,
                   });
                 }
               } else if (progData.status === 'failed') {
@@ -500,7 +527,8 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
                 set({
                   isTranscribing: false,
                   transcribingStep: '',
-                  transcribeError: progData.error || 'Transcription failed'
+                  transcribeError: progData.error || 'Transcription failed',
+                  transcribeTaskId: null,
                 });
               }
             }

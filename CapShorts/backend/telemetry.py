@@ -68,7 +68,7 @@ class TelemetryManager:
         self.session_start = time.time()
         self.machine_id = self._get_or_create_machine_id()
         self.os_info = self._get_os_info()
-        self.app_version = "1.1.2"
+        self.app_version = "1.1.4"
         self.videos_transcribed = 0
         self.videos_exported = 0
         self._lock = threading.Lock()

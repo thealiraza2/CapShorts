@@ -119,10 +119,17 @@ export const SettingsModal: React.FC = () => {
       const res = await fetch(apiUrl('/api/system/apply-update'), { method: 'POST' });
       const data = await res.json();
       if (data.success) {
-        setUpdateStatusMessage(data.message || 'Update applied successfully! Reloading studio in 3 seconds...');
-        setTimeout(() => {
-          window.location.reload();
-        }, 3000);
+        if (data.is_packaged || data.action_required === 'download') {
+          setUpdateStatusMessage(data.message || 'Opening official download page for the latest release...');
+          setIsApplyingUpdate(false);
+          const dlUrl = data.download_url || data.release_url || 'https://github.com/thealiraza2/CapShorts/releases/latest';
+          window.open(dlUrl, '_blank');
+        } else {
+          setUpdateStatusMessage(data.message || 'Update applied successfully! Reloading studio in 3 seconds...');
+          setTimeout(() => {
+            window.location.reload();
+          }, 3000);
+        }
       } else {
         setUpdateStatusMessage(`Update notice: ${data.message || data.error}`);
         setIsApplyingUpdate(false);
@@ -550,7 +557,7 @@ export const SettingsModal: React.FC = () => {
                   <div className="bg-black/40 border border-white/[0.06] rounded-xl p-2.5">
                     <span className="text-[10px] text-zinc-500 uppercase tracking-wider block font-semibold">Studio Version</span>
                     <span className="text-xs font-bold text-white mt-0.5 block">
-                      v{updateInfo?.current_version || '1.1.2'}
+                      v{updateInfo?.current_version || '1.1.4'}
                     </span>
                   </div>
                   <div className="bg-black/40 border border-white/[0.06] rounded-xl p-2.5">

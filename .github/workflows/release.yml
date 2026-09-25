@@ -175,8 +175,7 @@ jobs:
             - 📦 **Zero Dependencies**: Python AI daemon and FFmpeg are bundled directly inside the installer!
 
             ### 📥 Downloads
-            - **Windows**: `CapShorts_${{ github.ref_name }}_x64-setup.exe`
-            - **macOS (Apple Silicon M1/M2/M3/M4)**: `CapShorts_${{ github.ref_name }}_aarch64.dmg`
-            - **macOS (Intel Core i5/i7/i9)**: `CapShorts_${{ github.ref_name }}_x64.dmg`
+            - **Windows (Setup Installer)**: `CapShorts_x64-setup.exe` / `CapShorts_x64_en-US.msi`
+            - **macOS (Universal - Apple Silicon & Intel)**: `CapShorts_universal.dmg`
           releaseDraft: false
           prerelease: false

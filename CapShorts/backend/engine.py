@@ -149,33 +149,6 @@ def verify_loopback_request(request: Request):
     if client_host not in allowed_hosts:
         raise HTTPException(status_code=403, detail="Remote network access forbidden. Local loopback only.")
 
-# Daemon Session Token Authentication (0600 file in ~/.capshorts)
-CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".capshorts")
-SESSION_TOKEN_PATH = os.path.join(CONFIG_DIR, "session_token")
-
-def get_or_create_session_token() -> str:
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    if os.path.exists(SESSION_TOKEN_PATH):
-        try:
-            with open(SESSION_TOKEN_PATH, "r", encoding="utf-8") as f:
-                t = f.read().strip()
-                if len(t) >= 32:
-                    return t
-        except Exception:
-            pass
-    token = uuid.uuid4().hex + uuid.uuid4().hex
-    try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        mode = 0o600
-        fd = os.open(SESSION_TOKEN_PATH, flags, mode)
-        with open(fd, "w", encoding="utf-8") as f:
-            f.write(token)
-    except Exception as e:
-        print(f"[engine] Warning: Could not write session token: {e}")
-    return token
-
-ACTIVE_SESSION_TOKEN = get_or_create_session_token()
-
 # Asynchronous Tasks, Concurrency Control & Thread Locks
 MAX_CONCURRENT_EXPORTS = max(1, min(4, (os.cpu_count() or 2) - 1))
 EXPORT_SEMAPHORE = threading.Semaphore(MAX_CONCURRENT_EXPORTS)
@@ -187,23 +160,65 @@ EXPORT_TASKS: Dict[str, Dict[str, Any]] = {}
 TRANSCRIBE_JOBS: Dict[str, Dict[str, Any]] = {}
 MODEL_LOAD_LOCK = threading.Lock()
 TRANSCRIBE_LOCK = threading.Lock()
+TASKS_LOCK = threading.Lock()
+
+def update_task_state(task_dict: Dict[str, Dict[str, Any]], task_id: str, new_fields: Dict[str, Any]):
+    """
+    Safely updates a task dictionary while strictly preserving _created_at timestamp
+    and recording _completed_at timestamp for terminal states.
+    """
+    with TASKS_LOCK:
+        now = time.time()
+        existing = task_dict.get(task_id, {})
+        created_at = existing.get("_created_at") or new_fields.get("_created_at") or now
+        merged = {**existing, **new_fields, "_created_at": created_at}
+        status = str(merged.get("status", "")).lower()
+        if any(term in status for term in ("completed", "failed", "error")) and "_completed_at" not in merged:
+            merged["_completed_at"] = now
+        task_dict[task_id] = merged
 
 def prune_stale_tasks(task_dict: Dict[str, Dict[str, Any]]):
-    """Evicts completed or failed tasks older than 30 minutes, or oldest if size exceeds cap."""
-    now = time.time()
-    stale_keys = []
-    for tid, info in list(task_dict.items()):
-        status = str(info.get("status", "")).lower()
-        created_at = info.get("_created_at", 0)
-        if (now - created_at > TASK_TTL_SECONDS) and ("processing" not in status and "encoding" not in status):
-            stale_keys.append(tid)
-    for k in stale_keys:
-        task_dict.pop(k, None)
-    if len(task_dict) > MAX_TASK_ENTRIES:
-        sorted_keys = sorted(task_dict.keys(), key=lambda k: task_dict[k].get("_created_at", 0))
-        for k in sorted_keys[:len(task_dict) - MAX_TASK_ENTRIES]:
-            if "processing" not in str(task_dict[k].get("status", "")).lower():
+    """
+    Evicts terminal tasks older than TASK_TTL_SECONDS (30 mins).
+    Active jobs (processing/encoding/rendering/starting) are NEVER evicted.
+    Enforces MAX_TASK_ENTRIES cap by evicting oldest terminal tasks first.
+    """
+    with TASKS_LOCK:
+        now = time.time()
+        stale_keys = []
+        for tid, info in list(task_dict.items()):
+            status = str(info.get("status", "")).lower()
+            is_active = any(s in status for s in ("processing", "encoding", "rendering", "starting", "queued"))
+            if is_active:
+                continue
+            completion_time = info.get("_completed_at") or info.get("_created_at") or now
+            if (now - completion_time) > TASK_TTL_SECONDS:
+                stale_keys.append(tid)
+
+        for k in stale_keys:
+            task_dict.pop(k, None)
+
+        if len(task_dict) > MAX_TASK_ENTRIES:
+            terminal_keys = [
+                k for k, v in task_dict.items()
+                if not any(s in str(v.get("status", "")).lower() for s in ("processing", "encoding", "rendering", "starting", "queued"))
+            ]
+            terminal_keys.sort(key=lambda k: task_dict[k].get("_completed_at") or task_dict[k].get("_created_at") or 0)
+            excess = len(task_dict) - MAX_TASK_ENTRIES
+            for k in terminal_keys[:excess]:
                 task_dict.pop(k, None)
+
+class WordItem(BaseModel):
+    start: float = Field(ge=0.0)
+    end: float = Field(ge=0.0)
+    word: str = Field(min_length=0)
+    keyword: Optional[bool] = False
+
+    @model_validator(mode="after")
+    def validate_word_timestamps(self):
+        if self.end < self.start:
+            raise ValueError("Word 'end' timestamp must be greater than or equal to 'start'")
+        return self
 
 # High-impact viral keywords for auto-highlighting
 VIRAL_KEYWORDS = {
@@ -473,11 +488,11 @@ def run_transcribe_job(
     # MODE 1: ULTRA-FAST CLOUD AI WITH KEY POOL ROTATION (CapCut Speed: 2-3 Seconds)
     if key_pool:
         try:
-            TRANSCRIBE_JOBS[task_id] = {
+            update_task_state(TRANSCRIBE_JOBS, task_id, {
                 "progress": 25,
                 "step": "⚡ Turbo Mode: Extracting compressed audio...",
                 "status": "processing"
-            }
+            })
             audio_mp3 = os.path.join(TEMP_DIR, f"audio_turbo_{task_id}.mp3")
             try:
                 trim_args = []
@@ -494,25 +509,25 @@ def run_transcribe_job(
                 ]
                 subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, **SUBPROCESS_EXTRA_KWARGS)
 
-                TRANSCRIBE_JOBS[task_id] = {
+                update_task_state(TRANSCRIBE_JOBS, task_id, {
                     "progress": 55,
                     "step": f"⚡ Turbo Mode: Running Groq Whisper Large-v3 ({len(key_pool)} key pool active)...",
                     "status": "processing"
-                }
+                })
 
                 words_result, dur = transcribe_with_groq_pool(audio_mp3, key_pool, language)
                 words_result = tag_keywords(words_result)
 
-                TRANSCRIBE_JOBS[task_id] = {
+                update_task_state(TRANSCRIBE_JOBS, task_id, {
                     "progress": 90,
                     "step": "⚡ Generating viral shorts & highlight clips...",
                     "status": "processing"
-                }
+                })
 
                 video_dur = dur if dur > 0 else (words_result[-1]["end"] if words_result else 60.0)
                 clips_result = detect_viral_clips(words_result, video_dur)
 
-                TRANSCRIBE_JOBS[task_id] = {
+                update_task_state(TRANSCRIBE_JOBS, task_id, {
                     "progress": 100,
                     "step": f"Complete in ~4s! Extracted {len(words_result)} words and {len(clips_result)} viral clips.",
                     "status": "completed",
@@ -520,7 +535,7 @@ def run_transcribe_job(
                     "clips": clips_result,
                     "duration": video_dur,
                     "video_path": target_video
-                }
+                })
                 return
             finally:
                 if os.path.exists(audio_mp3):
@@ -531,20 +546,20 @@ def run_transcribe_job(
 
         except Exception as e:
             print(f"[engine] Cloud Turbo pool exhausted, falling back to local CPU: {e}")
-            TRANSCRIBE_JOBS[task_id] = {
+            update_task_state(TRANSCRIBE_JOBS, task_id, {
                 "progress": 30,
-                "step": f"Cloud busy or exhausted. Automatically switching to Local AI...",
+                "step": "Cloud busy or exhausted. Automatically switching to Local AI...",
                 "status": "processing"
-            }
+            })
 
     # MODE 2: LOCAL OFFLINE WHISPER ON CPU/GPU
     with TRANSCRIBE_LOCK:
         try:
-            TRANSCRIBE_JOBS[task_id] = {
+            update_task_state(TRANSCRIBE_JOBS, task_id, {
                 "progress": 15,
                 "step": "Extracting audio with FFmpeg...",
                 "status": "processing"
-            }
+            })
 
             audio_wav = os.path.join(TEMP_DIR, f"audio_{task_id}.wav")
             trim_args = []
@@ -567,11 +582,11 @@ def run_transcribe_job(
             audio_duration = get_audio_duration_wave(audio_wav)
             total_sec = int(audio_duration) if audio_duration > 0 else 60
 
-            TRANSCRIBE_JOBS[task_id] = {
+            update_task_state(TRANSCRIBE_JOBS, task_id, {
                 "progress": 25,
                 "step": f"Audio extracted ({total_sec//60:02d}:{total_sec%60:02d}). Starting Whisper CPU...",
                 "status": "processing"
-            }
+            })
 
             whisper_engine = get_whisper_model(model)
             words_result = []
@@ -598,11 +613,11 @@ def run_transcribe_job(
                     if actual_dur > 0:
                         current_sec = int(segment.end)
                         pct = min(92, 25 + int((segment.end / actual_dur) * 65))
-                        TRANSCRIBE_JOBS[task_id] = {
+                        update_task_state(TRANSCRIBE_JOBS, task_id, {
                             "progress": pct,
                             "step": f"Transcribing speech: {current_sec//60:02d}:{current_sec%60:02d} / {int(actual_dur)//60:02d}:{int(actual_dur)%60:02d} ({pct}%)...",
                             "status": "processing"
-                        }
+                        })
 
                     if segment.words:
                         for w in segment.words:
@@ -628,16 +643,16 @@ def run_transcribe_job(
 
             words_result = tag_keywords(words_result)
 
-            TRANSCRIBE_JOBS[task_id] = {
+            update_task_state(TRANSCRIBE_JOBS, task_id, {
                 "progress": 95,
                 "step": "Detecting viral shorts & clips (Opus Clip Engine)...",
                 "status": "processing"
-            }
+            })
 
             video_duration = words_result[-1]["end"] if words_result else (audio_duration or 60.0)
             clips_result = detect_viral_clips(words_result, video_duration)
 
-            TRANSCRIBE_JOBS[task_id] = {
+            update_task_state(TRANSCRIBE_JOBS, task_id, {
                 "progress": 100,
                 "step": f"Complete! Extracted {len(words_result)} words and {len(clips_result)} viral clips.",
                 "status": "completed",
@@ -645,7 +660,7 @@ def run_transcribe_job(
                 "clips": clips_result,
                 "duration": video_duration,
                 "video_path": os.path.basename(target_video)
-            }
+            })
             try:
                 telemetry.record_transcribe()
             except Exception:
@@ -654,14 +669,14 @@ def run_transcribe_job(
         except Exception as e:
             print(f"[engine] Transcribe job error: {e}")
             err_msg = str(e) if "No speech could be extracted" in str(e) else "Transcription failed. Please check audio quality and format."
-            TRANSCRIBE_JOBS[task_id] = {
+            update_task_state(TRANSCRIBE_JOBS, task_id, {
                 "progress": 100,
                 "step": err_msg,
                 "status": "failed",
                 "error": err_msg,
                 "words": [],
                 "clips": []
-            }
+            })
         finally:
             prune_stale_tasks(TRANSCRIBE_JOBS)
             if audio_wav and os.path.exists(audio_wav) and audio_wav != target_video:
@@ -673,29 +688,36 @@ def run_transcribe_job(
 def save_upload_file_capped(upload_file: UploadFile, destination_path: str, max_bytes: int = MAX_UPLOAD_BYTES):
     """Safely streams upload file to destination up to max_bytes cap, cleaning up on overflow."""
     total_written = 0
+    buffer = None
     try:
-        with open(destination_path, "wb") as buffer:
-            while True:
-                chunk = upload_file.file.read(1024 * 1024)
-                if not chunk:
-                    break
-                total_written += len(chunk)
-                if total_written > max_bytes:
-                    buffer.close()
-                    try:
-                        os.remove(destination_path)
-                    except Exception:
-                        pass
-                    raise HTTPException(status_code=413, detail=f"File exceeds maximum allowed upload size ({max_bytes // (1024 * 1024 * 1024)} GB)")
-                buffer.write(chunk)
+        buffer = open(destination_path, "wb")
+        while True:
+            chunk = upload_file.file.read(1024 * 1024)
+            if not chunk:
+                break
+            total_written += len(chunk)
+            if total_written > max_bytes:
+                buffer.close()
+                buffer = None
+                try:
+                    os.remove(destination_path)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=413, detail=f"File exceeds maximum allowed upload size ({max_bytes // (1024 * 1024 * 1024)} GB)")
+            buffer.write(chunk)
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
+        if buffer and not buffer.closed:
+            buffer.close()
         try:
             os.remove(destination_path)
         except Exception:
             pass
         raise HTTPException(status_code=500, detail="Failed to save uploaded video file")
+    finally:
+        if buffer and not buffer.closed:
+            buffer.close()
 
 @app.post("/api/transcribe")
 def start_transcription(
@@ -724,12 +746,11 @@ def start_transcription(
     else:
         raise HTTPException(status_code=400, detail="No video file or video_path provided")
 
-    TRANSCRIBE_JOBS[task_id] = {
+    update_task_state(TRANSCRIBE_JOBS, task_id, {
         "progress": 5,
         "step": "Video uploaded. Initializing audio pipeline...",
-        "status": "processing",
-        "_created_at": time.time()
-    }
+        "status": "processing"
+    })
 
     background_tasks.add_task(
         run_transcribe_job,
@@ -774,7 +795,7 @@ def save_master_key_api(payload: MasterKeyPayload):
     return {"status": "success", "master_groq_active": len(active_keys) > 0, "count": len(active_keys)}
 
 class GenerateClipsPayload(BaseModel):
-    words: List[Dict[str, Any]]
+    words: List[WordItem]
     duration: float = Field(ge=0.0)
     min_clip_duration: Optional[float] = Field(default=25.0, gt=0.0)
     max_clip_duration: Optional[float] = Field(default=60.0, gt=0.0)
@@ -790,37 +811,15 @@ class GenerateClipsPayload(BaseModel):
 @app.post("/api/clips/generate")
 def generate_clips_endpoint(payload: GenerateClipsPayload):
     """Regenerates viral shorts from given transcript with customized duration parameters."""
+    words_dicts = [w.model_dump() if hasattr(w, "model_dump") else (w.dict() if hasattr(w, "dict") else w) for w in payload.words]
     clips = detect_viral_clips(
-        words=payload.words,
+        words=words_dicts,
         total_duration=payload.duration,
         min_clip_duration=payload.min_clip_duration if payload.min_clip_duration is not None else 25.0,
         max_clip_duration=payload.max_clip_duration if payload.max_clip_duration is not None else 60.0,
         target_clips_count=payload.target_clips_count if payload.target_clips_count is not None else 5
     )
     return {"status": "success", "clips": clips}
-
-def generate_demo_transcript() -> List[Dict[str, Any]]:
-    """Realistic sample speech transcription with millisecond word timestamps."""
-    sample_text = (
-        "Unlock millions of views with AI video captions! "
-        "Stop wasting hours manually editing subtitles. "
-        "This tool automatically highlights keywords and creates viral shorts in seconds."
-    )
-    words = sample_text.split()
-    result = []
-    current_time = 0.30
-    
-    for w in words:
-        duration = max(0.25, len(w) * 0.065)
-        result.append({
-            "start": round(current_time, 2),
-            "end": round(current_time + duration, 2),
-            "word": w,
-            "keyword": False
-        })
-        current_time += duration + 0.08
-    
-    return tag_keywords(result)
 
 @app.get("/api/broll/search")
 def broll_search(keyword: str, api_key: Optional[str] = None, x_pexels_key: Optional[str] = Header(None)):
@@ -831,7 +830,7 @@ def broll_search(keyword: str, api_key: Optional[str] = None, x_pexels_key: Opti
 
 class ExportPayload(BaseModel):
     video_path: Optional[str] = None
-    transcript: List[Dict[str, Any]]
+    transcript: List[WordItem]
     preset: Dict[str, Any]
     custom_overrides: Optional[Dict[str, Any]] = None
     broll_clips: Optional[List[Dict[str, Any]]] = None
@@ -850,37 +849,36 @@ class ExportPayload(BaseModel):
 
 def run_export_job(task_id: str, payload: ExportPayload):
     """Background task executing FFmpeg ASS subtitle burning, clip trimming, dynamic scaling, and B-roll composite."""
-    if not EXPORT_SEMAPHORE.acquire(timeout=2.0):
-        EXPORT_TASKS[task_id] = {
-            "progress": 100,
-            "status": "Export Error: Maximum concurrent export limit reached. Please try again shortly.",
-            "error": "Maximum concurrent export limit reached."
-        }
-        return
-
     ass_path = None
     try:
         prune_stale_tasks(EXPORT_TASKS)
-        EXPORT_TASKS[task_id] = {"progress": 10, "status": "Generating Subtitles (.ass)...", "error": None, "_created_at": time.time()}
+        update_task_state(EXPORT_TASKS, task_id, {"progress": 10, "status": "Generating Subtitles (.ass)...", "error": None})
 
         if not check_ffmpeg():
             raise RuntimeError("FFmpeg is not installed or not found on system PATH. Please install FFmpeg to export videos.")
 
-        transcript_to_use = payload.transcript
+        transcript_raw = [
+            (w.model_dump() if hasattr(w, "model_dump") else (w.dict() if hasattr(w, "dict") else w))
+            for w in payload.transcript
+        ]
         is_clip_export = payload.clip_start is not None and payload.clip_end is not None and payload.clip_end > payload.clip_start
 
         if is_clip_export:
             c_start = payload.clip_start
             c_end = payload.clip_end
             shifted = []
-            for w in payload.transcript:
-                if w["end"] >= c_start and w["start"] <= c_end:
+            for w in transcript_raw:
+                w_start = float(w.get("start", 0.0))
+                w_end = float(w.get("end", 0.0))
+                if w_end >= c_start and w_start <= c_end:
                     shifted.append({
                         **w,
-                        "start": max(0.0, round(w["start"] - c_start, 2)),
-                        "end": max(0.0, round(w["end"] - c_start, 2))
+                        "start": max(0.0, round(w_start - c_start, 2)),
+                        "end": max(0.0, round(w_end - c_start, 2))
                     })
-            transcript_to_use = shifted if shifted else payload.transcript
+            transcript_to_use = shifted if shifted else transcript_raw
+        else:
+            transcript_to_use = transcript_raw
 
         safe_output_name = os.path.basename((payload.output_filename or "capshorts_export.mp4").strip().replace("\\", "/"))
         if not safe_output_name.endswith(".mp4"):
@@ -919,7 +917,7 @@ def run_export_job(task_id: str, payload: ExportPayload):
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(ass_content)
         
-        EXPORT_TASKS[task_id] = {"progress": 30, "status": "Processing Overlays..."}
+        update_task_state(EXPORT_TASKS, task_id, {"progress": 30, "status": "Processing Overlays..."})
 
         downloaded_broll = []
         if payload.broll_clips:
@@ -940,7 +938,7 @@ def run_export_job(task_id: str, payload: ExportPayload):
                                 "end": end_time
                             })
         
-        EXPORT_TASKS[task_id] = {"progress": 50, "status": "Encoding Video with FFmpeg..."}
+        update_task_state(EXPORT_TASKS, task_id, {"progress": 50, "status": "Encoding Video with FFmpeg..."})
 
         escaped_ass = ass_path.replace("\\", "/").replace(":", "\\:")
         
@@ -1005,23 +1003,25 @@ def run_export_job(task_id: str, payload: ExportPayload):
             if proc2.returncode != 0:
                 raise RuntimeError("FFmpeg render failed on both hardware and software encoders.")
 
-        EXPORT_TASKS[task_id] = {
+        update_task_state(EXPORT_TASKS, task_id, {
             "progress": 100,
             "status": f"Complete! Video rendered using {hw_encoder_name}.",
             "output_path": output_file,
             "download_url": f"/api/download/{os.path.basename(output_file)}"
-        }
+        })
         try:
             telemetry.record_export()
         except Exception:
             pass
 
     except Exception as e:
-        EXPORT_TASKS[task_id] = {
+        print(f"[export] Job {task_id} failed: {e}")
+        safe_msg = str(e) if isinstance(e, (RuntimeError, ValueError)) else "Video rendering failed during processing or encoding."
+        update_task_state(EXPORT_TASKS, task_id, {
             "progress": 100,
-            "status": f"Export Error: {str(e)}",
-            "error": str(e)
-        }
+            "status": f"Export Error: {safe_msg}",
+            "error": safe_msg
+        })
     finally:
         EXPORT_SEMAPHORE.release()
         prune_stale_tasks(EXPORT_TASKS)
@@ -1046,16 +1046,17 @@ def download_exported_file(filename: str):
     )
 
 class ScriptConvertPayload(BaseModel):
-    words: List[Dict[str, Any]]
+    words: List[WordItem]
     target_script: str  # "roman_urdu" | "english"
 
 @app.post("/api/transcript/convert-script")
 def convert_script(payload: ScriptConvertPayload):
     """Converts existing transcript words into Roman Urdu or clean English on the fly."""
+    words_dicts = [w.model_dump() if hasattr(w, "model_dump") else (w.dict() if hasattr(w, "dict") else w) for w in payload.words]
     if payload.target_script in ["roman_urdu", "roman"]:
-        converted = transliterate_transcript(payload.words)
+        converted = transliterate_transcript(words_dicts)
         return {"words": converted}
-    return {"words": payload.words}
+    return {"words": words_dicts}
 
 def resolve_video_file(path: Optional[str]) -> str:
     """Helper to resolve a video file path safely strictly within approved directories (TEMP_DIR, OUTPUT_DIR)."""
@@ -1133,7 +1134,8 @@ def detect_silence(payload: SilenceDetectPayload):
             "count": len(silence_regions)
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Silence detection failed: {str(e)}")
+        print(f"[silence] Error: {e}")
+        raise HTTPException(status_code=500, detail="Silence detection failed during audio analysis.")
 
 class VideoSegmentItem(BaseModel):
     start: float = Field(ge=0.0)
@@ -1236,7 +1238,8 @@ def split_video_segments(payload: VideoSplitPayload):
             "total_duration": total_dur
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Stream copy split failed: {str(e)}")
+        print(f"[split] Error: {e}")
+        raise HTTPException(status_code=500, detail="Stream copy split failed during video slicing.")
     finally:
         for cf in chunk_files:
             try:
@@ -1254,8 +1257,14 @@ def split_video_segments(payload: VideoSplitPayload):
 def start_export(payload: ExportPayload, background_tasks: BackgroundTasks):
     """Triggers asynchronous video rendering with live progress tracking."""
     prune_stale_tasks(EXPORT_TASKS)
+    if not EXPORT_SEMAPHORE.acquire(blocking=False):
+        raise HTTPException(
+            status_code=429,
+            detail="Maximum concurrent export limit reached. Please wait for active exports to complete and try again.",
+            headers={"Retry-After": "30"}
+        )
     task_id = str(uuid.uuid4())[:8]
-    EXPORT_TASKS[task_id] = {"progress": 0, "status": "Queued...", "error": None, "_created_at": time.time()}
+    update_task_state(EXPORT_TASKS, task_id, {"progress": 0, "status": "Queued...", "error": None})
     background_tasks.add_task(run_export_job, task_id, payload)
     return {"status": "started", "task_id": task_id}
 
@@ -1267,7 +1276,7 @@ def get_export_progress(task_id: str):
     return EXPORT_TASKS[task_id]
 
 class SubtitleExportPayload(BaseModel):
-    transcript: List[Dict[str, Any]]
+    transcript: List[WordItem]
     format: str = "srt"  # "srt", "vtt", or "ass"
     preset: Optional[Dict[str, Any]] = None
     custom_overrides: Optional[Dict[str, Any]] = None
@@ -1278,18 +1287,19 @@ class SubtitleExportPayload(BaseModel):
 def export_subtitles(payload: SubtitleExportPayload):
     """Exports transcript to standalone SRT, VTT, or ASS subtitle content."""
     fmt = payload.format.lower().strip()
+    words_dicts = [w.model_dump() if hasattr(w, "model_dump") else (w.dict() if hasattr(w, "dict") else w) for w in payload.transcript]
     if fmt == "srt":
-        content = generate_srt_subtitles(payload.transcript)
+        content = generate_srt_subtitles(words_dicts)
         media_type = "application/x-subrip"
         ext = "srt"
     elif fmt == "vtt":
-        content = generate_vtt_subtitles(payload.transcript)
+        content = generate_vtt_subtitles(words_dicts)
         media_type = "text/vtt"
         ext = "vtt"
     elif fmt == "ass":
         preset = payload.preset or {}
         content = generate_ass_subtitles(
-            payload.transcript,
+            words_dicts,
             preset,
             video_width=payload.video_width,
             video_height=payload.video_height,
@@ -1336,7 +1346,7 @@ def get_update_status():
     git_dir = os.path.join(project_root, ".git")
     is_git_repo = os.path.exists(git_dir)
     
-    current_version = "1.1.3"
+    current_version = "1.1.4"
     current_commit = "unknown"
     latest_commit = "unknown"
     update_available = False
@@ -1414,7 +1424,7 @@ def apply_update():
             if proc.returncode != 0:
                 return {
                     "success": False,
-                    "error": proc.stderr or proc.stdout,
+                    "error": "Git pull operation was interrupted.",
                     "message": "Git pull was interrupted. Please ensure your local files are saved."
                 }
             
@@ -1433,7 +1443,8 @@ def apply_update():
                 "action_required": "download"
             }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        print(f"[engine] Update failed: {e}")
+        return {"success": False, "error": "System update encountered an error."}
 
 @app.get("/api/system/telemetry-stats")
 def get_telemetry_stats():
