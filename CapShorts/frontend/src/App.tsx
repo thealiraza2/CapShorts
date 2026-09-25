@@ -46,28 +46,52 @@ export const App: React.FC = () => {
 
   // Poll Local AI Engine status
   useEffect(() => {
+    let isMounted = true;
     const checkHealth = async () => {
       try {
         const res = await fetch(apiUrl('/api/health'));
         if (res.ok) {
           const data = await res.json();
-          setEngineHealth(data);
+          if (isMounted) setEngineHealth(data);
+        } else {
+          if (isMounted) {
+            setEngineHealth({
+              status: 'offline',
+              device: 'Offline (AI engine returned error)',
+              cuda_available: false,
+              whisper_available: false,
+              ffmpeg_available: false,
+              active_models: []
+            });
+          }
         }
       } catch (err) {
-        setEngineHealth({
-          status: 'offline',
-          device: 'Offline (AI engine not reachable)',
-          cuda_available: false,
-          whisper_available: false,
-          ffmpeg_available: false,
-          active_models: []
-        });
+        if (isMounted) {
+          setEngineHealth({
+            status: 'offline',
+            device: 'Offline (AI engine not reachable)',
+            cuda_available: false,
+            whisper_available: false,
+            ffmpeg_available: false,
+            active_models: []
+          });
+        }
       }
     };
 
     checkHealth();
+    const t1 = setTimeout(checkHealth, 1500);
+    const t2 = setTimeout(checkHealth, 3500);
+    const t3 = setTimeout(checkHealth, 6000);
     const interval = setInterval(checkHealth, 10000);
-    return () => clearInterval(interval);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      clearInterval(interval);
+    };
   }, [setEngineHealth]);
 
   // Global Keyboard Shortcuts (Space: Play/Pause, Ctrl+B: Split, Del: Delete, N: Snap)

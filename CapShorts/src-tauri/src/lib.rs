@@ -27,7 +27,14 @@ pub fn run() {
                     resource_dir.join("binaries").join("backend-engine.exe"),
                     resource_dir.join("binaries").join("backend-engine"),
                     resource_dir.join("CapShorts").join("backend-engine.exe"),
-                    resource_dir.join("CapShorts").join("backend-engine"),
+                    std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.parent().map(|d| d.join("binaries").join("backend-engine.exe")))
+                        .unwrap_or_default(),
+                    std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.parent().map(|d| d.join("binaries").join("backend-engine")))
+                        .unwrap_or_default(),
                     std::env::current_exe()
                         .ok()
                         .and_then(|p| p.parent().map(|d| d.join("backend-engine.exe")))

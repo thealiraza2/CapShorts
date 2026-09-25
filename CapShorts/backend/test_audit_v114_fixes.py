@@ -117,6 +117,14 @@ class TestAuditV114Remediation(unittest.TestCase):
             verify_loopback_request(external_req)
         self.assertEqual(ctx.exception.status_code, 403)
 
+    def test_tauri_cors_origins(self):
+        """Verify that http://tauri.localhost (Windows WebView2) is allowed in CORS configuration."""
+        from engine import LOCAL_ALLOWED_ORIGINS
+        self.assertIn("http://tauri.localhost", LOCAL_ALLOWED_ORIGINS)
+        self.assertIn("https://tauri.localhost", LOCAL_ALLOWED_ORIGINS)
+        self.assertIn("tauri://localhost", LOCAL_ALLOWED_ORIGINS)
+
 
 if __name__ == "__main__":
     unittest.main()
+

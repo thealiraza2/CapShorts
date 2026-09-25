@@ -84,16 +84,17 @@ LOCAL_ALLOWED_ORIGINS = [
     "http://127.0.0.1:1420",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "tauri://localhost",
+    "http://tauri.localhost",
     "https://tauri.localhost",
+    "tauri://localhost",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=LOCAL_ALLOWED_ORIGINS,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|https?://tauri\.localhost|tauri://localhost)$",
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
 )
 
