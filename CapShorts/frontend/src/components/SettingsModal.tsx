@@ -82,17 +82,31 @@ export const SettingsModal: React.FC = () => {
   const [isApplyingUpdate, setIsApplyingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{
     current_version: string;
+    latest_version: string;
+    latest_tag?: string;
     current_commit: string;
-    latest_commit: string;
     update_available: boolean;
     is_git_repo: boolean;
     platform: string;
     details: string;
+    asset_name?: string;
+    download_url?: string;
+    asset_size_mb?: number;
+    exe_download_url?: string;
     msi_download_url?: string;
     dmg_download_url?: string;
     release_url?: string;
   } | null>(null);
   const [updateStatusMessage, setUpdateStatusMessage] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<{
+    status: 'idle' | 'downloading' | 'completed' | 'error';
+    progress: number;
+    downloaded_bytes: number;
+    total_bytes: number;
+    file_name?: string;
+    error?: string;
+  } | null>(null);
+  const [isDownloadingUpdate, setIsDownloadingUpdate] = useState(false);
 
   const fetchUpdateStatus = async () => {
     setIsCheckingUpdate(true);
@@ -112,23 +126,72 @@ export const SettingsModal: React.FC = () => {
     }
   };
 
+  const handleStartInAppUpdate = async (overrideUrl?: string, overrideName?: string) => {
+    setIsDownloadingUpdate(true);
+    setUpdateStatusMessage('Starting background download of latest release...');
+    try {
+      const targetUrl = overrideUrl || updateInfo?.download_url;
+      const targetName = overrideName || updateInfo?.asset_name;
+      const res = await fetch(apiUrl('/api/system/download-update'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ download_url: targetUrl, file_name: targetName })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setUpdateStatusMessage(`Download failed: ${data.detail || data.error || 'Unknown error'}`);
+        setIsDownloadingUpdate(false);
+        return;
+      }
+
+      // Poll progress every 500ms
+      const pollInterval = setInterval(async () => {
+        try {
+          const progRes = await fetch(apiUrl('/api/system/download-update-progress'));
+          if (progRes.ok) {
+            const progData = await progRes.json();
+            setDownloadProgress(progData);
+            if (progData.status === 'completed') {
+              clearInterval(pollInterval);
+              setIsDownloadingUpdate(false);
+              setUpdateStatusMessage('Download complete! Launching official installer...');
+              // Trigger installer launch
+              await fetch(apiUrl('/api/system/launch-installer'), { method: 'POST' });
+              setUpdateStatusMessage('Installer launched! Follow the setup prompts on your screen to complete update.');
+            } else if (progData.status === 'error') {
+              clearInterval(pollInterval);
+              setIsDownloadingUpdate(false);
+              setUpdateStatusMessage(`Download interrupted: ${progData.error || 'Network error'}`);
+            }
+          }
+        } catch {
+          // ignore transient poll error
+        }
+      }, 500);
+    } catch (err: any) {
+      setIsDownloadingUpdate(false);
+      setUpdateStatusMessage(`Failed to initiate in-app update: ${err.message}`);
+    }
+  };
+
   const handleApplyUpdate = async () => {
+    if (updateInfo && !updateInfo.is_git_repo) {
+      await handleStartInAppUpdate();
+      return;
+    }
     setIsApplyingUpdate(true);
     setUpdateStatusMessage('Pulling latest code from GitHub...');
     try {
       const res = await fetch(apiUrl('/api/system/apply-update'), { method: 'POST' });
       const data = await res.json();
       if (data.success) {
-        if (data.is_packaged || data.action_required === 'download') {
-          setUpdateStatusMessage(data.message || 'Opening official download page for the latest release...');
-          setIsApplyingUpdate(false);
-          const dlUrl = data.download_url || data.release_url || 'https://github.com/thealiraza2/CapShorts/releases/latest';
-          window.open(dlUrl, '_blank');
-        } else {
+        if (data.action_required === 'reload') {
           setUpdateStatusMessage(data.message || 'Update applied successfully! Reloading studio in 3 seconds...');
           setTimeout(() => {
             window.location.reload();
           }, 3000);
+        } else {
+          await handleStartInAppUpdate();
         }
       } else {
         setUpdateStatusMessage(`Update notice: ${data.message || data.error}`);
@@ -577,30 +640,94 @@ export const SettingsModal: React.FC = () => {
                 {/* Action Area */}
                 {updateInfo?.update_available ? (
                   <div className="pt-2 border-t border-white/[0.06] space-y-3">
+                    {/* Live Download Progress Bar */}
+                    {(isDownloadingUpdate || downloadProgress?.status === 'downloading') && (
+                      <div className="space-y-1.5 bg-black/40 border border-emerald-500/20 rounded-xl p-3 animate-in fade-in">
+                        <div className="flex justify-between text-xs font-semibold text-white">
+                          <span className="flex items-center space-x-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                            <span>Downloading Update ({downloadProgress?.file_name || 'Installer'})...</span>
+                          </span>
+                          <span className="text-emerald-400 font-mono">{downloadProgress?.progress || 0}%</span>
+                        </div>
+                        <div className="w-full bg-zinc-800 rounded-full h-2.5 overflow-hidden border border-white/[0.06]">
+                          <div
+                            className="bg-gradient-to-r from-emerald-500 via-teal-400 to-sky-400 h-full rounded-full transition-all duration-300 shadow-sm"
+                            style={{ width: `${downloadProgress?.progress || 0}%` }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-[10px] text-zinc-400 font-mono">
+                          <span>
+                            {downloadProgress?.downloaded_bytes
+                              ? (downloadProgress.downloaded_bytes / (1024 * 1024)).toFixed(1)
+                              : 0}{' '}
+                            MB /{' '}
+                            {downloadProgress?.total_bytes
+                              ? (downloadProgress.total_bytes / (1024 * 1024)).toFixed(1)
+                              : 0}{' '}
+                            MB
+                          </span>
+                          <span className="text-zinc-500">Auto-installs once download finishes</span>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex items-center justify-between">
                       <div>
-                        <span className="text-xs font-semibold text-white">Latest Commit / Build:</span>
-                        <span className="ml-2 font-mono text-emerald-400 text-xs font-bold">#{updateInfo.latest_commit}</span>
+                        <span className="text-xs font-semibold text-white">Target Version:</span>
+                        <span className="ml-2 font-mono text-emerald-400 text-xs font-bold">
+                          v{updateInfo.latest_version} {updateInfo.asset_size_mb ? `(${updateInfo.asset_size_mb} MB)` : ''}
+                        </span>
                       </div>
+
                       {updateInfo.is_git_repo ? (
                         <button
                           onClick={handleApplyUpdate}
                           disabled={isApplyingUpdate}
-                          className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-black font-bold rounded-xl transition-all active:scale-95 shadow-lg shadow-emerald-500/20 flex items-center space-x-2 disabled:opacity-50"
+                          className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-black font-bold rounded-xl transition-all active:scale-95 shadow-lg shadow-emerald-500/20 flex items-center space-x-2 disabled:opacity-50 text-xs"
                         >
                           <Download className={`w-3.5 h-3.5 ${isApplyingUpdate ? 'animate-bounce' : ''}`} />
-                          <span>{isApplyingUpdate ? 'Updating CapShorts...' : '1-Click Update Now'}</span>
+                          <span>{isApplyingUpdate ? 'Updating CapShorts...' : '1-Click Git Update'}</span>
+                        </button>
+                      ) : downloadProgress?.status === 'completed' ? (
+                        <button
+                          onClick={async () => {
+                            setUpdateStatusMessage('Launching installer...');
+                            await fetch(apiUrl('/api/system/launch-installer'), { method: 'POST' });
+                            setUpdateStatusMessage('Installer launched! Follow setup prompts to complete.');
+                          }}
+                          className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-black font-bold rounded-xl transition-all active:scale-95 shadow-lg shadow-emerald-500/30 flex items-center space-x-2 text-xs"
+                        >
+                          <ArrowUpCircle className="w-4 h-4 animate-bounce" />
+                          <span>Launch Installer Now</span>
                         </button>
                       ) : (
-                        <a
-                          href={updateInfo.platform === 'windows' ? updateInfo.msi_download_url : updateInfo.dmg_download_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-sky-500 hover:from-indigo-400 hover:to-sky-400 text-white font-bold rounded-xl transition-all active:scale-95 shadow-lg shadow-indigo-500/20 flex items-center space-x-2"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>Download Latest Package</span>
-                        </a>
+                        <div className="flex items-center space-x-2">
+                          {updateInfo.platform === 'windows' && updateInfo.msi_download_url && (
+                            <button
+                              onClick={() => handleStartInAppUpdate(updateInfo.msi_download_url, updateInfo.asset_name?.replace('-setup.exe', '_en-US.msi') || 'CapShorts.msi')}
+                              disabled={isDownloadingUpdate}
+                              className="px-3 py-2 bg-white/[0.06] hover:bg-white/[0.1] text-zinc-300 hover:text-white rounded-xl text-xs font-semibold transition-all border border-white/[0.08]"
+                              title="Download MSI installer instead"
+                            >
+                              Download MSI
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleStartInAppUpdate()}
+                            disabled={isDownloadingUpdate}
+                            className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-black font-bold rounded-xl transition-all active:scale-95 shadow-lg shadow-emerald-500/20 flex items-center space-x-2 disabled:opacity-50 text-xs"
+                          >
+                            <Download className={`w-3.5 h-3.5 ${isDownloadingUpdate ? 'animate-bounce' : ''}`} />
+                            <span>
+                              {isDownloadingUpdate
+                                ? `Downloading (${downloadProgress?.progress || 0}%)...`
+                                : updateInfo.platform === 'darwin'
+                                ? '1-Click Update (DMG)'
+                                : '1-Click Update (Setup EXE)'}
+                            </span>
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -608,7 +735,7 @@ export const SettingsModal: React.FC = () => {
                   <div className="pt-2 border-t border-white/[0.06] flex items-center justify-between text-[11px] text-zinc-400">
                     <span className="flex items-center space-x-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                      <span>Zero manual re-downloads required — updates apply in 2 seconds.</span>
+                      <span>Zero manual re-downloads required — updates download and install inside the app.</span>
                     </span>
                     <a
                       href={updateInfo?.release_url || 'https://github.com/thealiraza2/CapShorts/releases/latest'}

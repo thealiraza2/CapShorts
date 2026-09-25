@@ -20,6 +20,12 @@ import wave
 import subprocess
 import threading
 import base64
+import json
+import re
+import tempfile
+import platform
+import urllib.request
+import urllib.parse
 
 # Eliminate all pop-up black console/terminal windows for FFmpeg on Windows safely across platforms
 SUBPROCESS_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0
@@ -1333,26 +1339,131 @@ def download_subtitles_file(filename: str):
     media_type = "application/x-subrip" if filename.endswith(".srt") else "text/vtt" if filename.endswith(".vtt") else "text/plain"
     return FileResponse(path, media_type=media_type, filename=os.path.basename(path))
 
+CURRENT_ENGINE_VERSION = "1.1.6"
+
+UPDATE_CACHE = {
+    "last_checked": 0.0,
+    "data": None
+}
+UPDATE_CACHE_TTL = 60.0
+
+UPDATE_DOWNLOAD_STATE = {
+    "status": "idle",
+    "progress": 0,
+    "downloaded_bytes": 0,
+    "total_bytes": 0,
+    "file_path": None,
+    "file_name": None,
+    "error": None
+}
+UPDATE_DOWNLOAD_LOCK = threading.Lock()
+
+def parse_semver(v: str) -> Tuple[int, int, int]:
+    """Extracts major, minor, patch semver from string like 'v1.1.5' or '1.1.5'."""
+    parts = re.findall(r"\d+", v.lstrip("v").strip())
+    if len(parts) >= 3:
+        return (int(parts[0]), int(parts[1]), int(parts[2]))
+    elif len(parts) == 2:
+        return (int(parts[0]), int(parts[1]), 0)
+    elif len(parts) == 1:
+        return (int(parts[0]), 0, 0)
+    return (0, 0, 0)
+
+def fetch_latest_github_release() -> Optional[Dict[str, Any]]:
+    """Fetches latest release info from GitHub API with caching."""
+    now = time.time()
+    if UPDATE_CACHE["data"] and (now - UPDATE_CACHE["last_checked"] < UPDATE_CACHE_TTL):
+        return UPDATE_CACHE["data"]
+    
+    url = "https://api.github.com/repos/thealiraza2/CapShorts/releases/latest"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": f"CapShorts-Desktop-App/{CURRENT_ENGINE_VERSION}"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                UPDATE_CACHE["data"] = data
+                UPDATE_CACHE["last_checked"] = now
+                return data
+    except Exception as e:
+        print(f"[engine] GitHub release check note: {e}")
+        if UPDATE_CACHE["data"]:
+            return UPDATE_CACHE["data"]
+    return None
+
+def download_update_worker(download_url: str, filename: str):
+    """Downloads installer in background thread with chunk streaming and progress tracking."""
+    global UPDATE_DOWNLOAD_STATE
+    try:
+        parsed = urllib.parse.urlparse(download_url)
+        if parsed.netloc not in ("github.com", "objects.githubusercontent.com"):
+            raise ValueError(f"Untrusted download host: {parsed.netloc}")
+        
+        target_dir = os.path.join(tempfile.gettempdir(), "CapShorts_Updates")
+        os.makedirs(target_dir, exist_ok=True)
+        safe_name = os.path.basename(filename)
+        dest_path = os.path.join(target_dir, safe_name)
+        
+        req = urllib.request.Request(
+            download_url,
+            headers={"User-Agent": f"CapShorts-Desktop-App/{CURRENT_ENGINE_VERSION}"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            total_size = int(resp.headers.get("content-length", 0))
+            with UPDATE_DOWNLOAD_LOCK:
+                UPDATE_DOWNLOAD_STATE.update({
+                    "status": "downloading",
+                    "progress": 0,
+                    "downloaded_bytes": 0,
+                    "total_bytes": total_size,
+                    "file_path": dest_path,
+                    "file_name": safe_name,
+                    "error": None
+                })
+            
+            downloaded = 0
+            chunk_size = 128 * 1024
+            with open(dest_path, "wb") as f:
+                while True:
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    progress = int((downloaded / total_size) * 100) if total_size > 0 else 50
+                    with UPDATE_DOWNLOAD_LOCK:
+                        UPDATE_DOWNLOAD_STATE["downloaded_bytes"] = downloaded
+                        UPDATE_DOWNLOAD_STATE["progress"] = min(progress, 99)
+            
+            with UPDATE_DOWNLOAD_LOCK:
+                UPDATE_DOWNLOAD_STATE.update({
+                    "status": "completed",
+                    "progress": 100,
+                    "downloaded_bytes": downloaded,
+                    "file_path": dest_path
+                })
+            print(f"[engine] Update successfully downloaded to: {dest_path}")
+    except Exception as e:
+        print(f"[engine] Download update failed: {e}")
+        with UPDATE_DOWNLOAD_LOCK:
+            UPDATE_DOWNLOAD_STATE.update({
+                "status": "error",
+                "error": str(e)
+            })
+
 @app.get("/api/system/update-status")
 def get_update_status():
-    """Checks whether a new update is available from GitHub (supports macOS, Windows, and MSI)."""
-    import platform
+    """Checks whether a new update is available from GitHub Releases (supports macOS DMG, Windows Setup EXE, and MSI)."""
     current_os = platform.system().lower()
     
-    # Locate project root containing .git or workspace
     project_root = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))
     if not os.path.exists(os.path.join(project_root, ".git")):
         project_root = os.path.abspath(os.path.join(BASE_DIR, ".."))
+    is_git_repo = os.path.exists(os.path.join(project_root, ".git"))
     
-    git_dir = os.path.join(project_root, ".git")
-    is_git_repo = os.path.exists(git_dir)
-    
-    current_version = "1.1.4"
     current_commit = "unknown"
-    latest_commit = "unknown"
-    update_available = False
-    details = ""
-    
     if is_git_repo:
         try:
             current_commit = subprocess.check_output(
@@ -1362,90 +1473,179 @@ def get_update_status():
                 timeout=5,
                 **SUBPROCESS_EXTRA_KWARGS
             ).strip()
+        except Exception:
+            pass
             
-            out = subprocess.check_output(
-                ["git", "ls-remote", "origin", "refs/heads/main"],
-                cwd=project_root,
-                text=True,
-                timeout=8,
-                **SUBPROCESS_EXTRA_KWARGS
-            ).strip()
-            
-            if out:
-                latest_commit = out.split()[0][:7]
-                update_available = (latest_commit != current_commit)
-                if update_available:
-                    details = f"New version ({latest_commit}) is ready to install!"
-                else:
-                    details = "CapShorts is up to date."
-        except Exception as e:
-            details = f"Update check note: {e}"
-    else:
-        details = "Packaged MSI/DMG release mode."
+    release_data = fetch_latest_github_release()
+    latest_tag = "unknown"
+    latest_version = CURRENT_ENGINE_VERSION
+    update_available = False
+    release_title = "CapShorts Release"
+    release_notes = ""
+    release_url = "https://github.com/thealiraza2/CapShorts/releases/latest"
+    
+    selected_asset_name = ""
+    selected_download_url = ""
+    selected_asset_size = 0
+    msi_download_url = ""
+    dmg_download_url = ""
+    exe_download_url = ""
+    
+    if release_data:
+        latest_tag = release_data.get("tag_name", "unknown")
+        latest_version = latest_tag.lstrip("v")
+        release_title = release_data.get("name") or f"CapShorts {latest_tag}"
+        release_notes = release_data.get("body", "")
+        release_url = release_data.get("html_url") or release_url
         
+        remote_sem = parse_semver(latest_tag)
+        local_sem = parse_semver(CURRENT_ENGINE_VERSION)
+        update_available = (remote_sem > local_sem)
+        
+        assets = release_data.get("assets", [])
+        
+        for a in assets:
+            name = a.get("name", "")
+            dl_url = a.get("browser_download_url", "")
+            
+            if name.endswith(".msi"):
+                msi_download_url = dl_url
+            if name.endswith(".dmg"):
+                dmg_download_url = dl_url
+            if name.endswith(".exe") and "backend-engine" not in name:
+                exe_download_url = dl_url
+        
+        if current_os == "windows":
+            setup_asset = next((a for a in assets if a.get("name", "").endswith("-setup.exe") or ("setup" in a.get("name", "").lower() and a.get("name", "").endswith(".exe"))), None)
+            if not setup_asset:
+                setup_asset = next((a for a in assets if a.get("name", "").endswith(".exe") and "backend-engine" not in a.get("name", "")), None)
+            if not setup_asset:
+                setup_asset = next((a for a in assets if a.get("name", "").endswith(".msi")), None)
+            
+            if setup_asset:
+                selected_asset_name = setup_asset.get("name", "")
+                selected_download_url = setup_asset.get("browser_download_url", "")
+                selected_asset_size = setup_asset.get("size", 0)
+        elif current_os == "darwin":
+            dmg_asset = next((a for a in assets if a.get("name", "").endswith(".dmg")), None)
+            if dmg_asset:
+                selected_asset_name = dmg_asset.get("name", "")
+                selected_download_url = dmg_asset.get("browser_download_url", "")
+                selected_asset_size = dmg_asset.get("size", 0)
+    
+    details = f"New version {latest_tag} is ready to install!" if update_available else "CapShorts is up to date."
+    
     return {
-        "current_version": current_version,
+        "current_version": CURRENT_ENGINE_VERSION,
+        "latest_version": latest_version,
+        "latest_tag": latest_tag,
         "current_commit": current_commit,
-        "latest_commit": latest_commit,
         "update_available": update_available,
         "is_git_repo": is_git_repo,
         "platform": current_os,
         "details": details,
-        "msi_download_url": "https://github.com/thealiraza2/CapShorts/releases/latest",
-        "dmg_download_url": "https://github.com/thealiraza2/CapShorts/releases/latest",
-        "release_url": "https://github.com/thealiraza2/CapShorts/releases/latest"
+        "release_title": release_title,
+        "release_notes": release_notes,
+        "release_url": release_url,
+        "asset_name": selected_asset_name,
+        "download_url": selected_download_url,
+        "asset_size_bytes": selected_asset_size,
+        "asset_size_mb": round(selected_asset_size / (1024 * 1024), 1) if selected_asset_size > 0 else 0,
+        "exe_download_url": exe_download_url or selected_download_url,
+        "msi_download_url": msi_download_url or release_url,
+        "dmg_download_url": dmg_download_url or release_url
     }
+
+@app.post("/api/system/download-update", dependencies=[Depends(verify_loopback_request)])
+def start_download_update(payload: Optional[Dict[str, Any]] = None):
+    """Starts background download of the specified or auto-detected installer asset."""
+    with UPDATE_DOWNLOAD_LOCK:
+        if UPDATE_DOWNLOAD_STATE["status"] == "downloading":
+            return {"success": True, "message": "Download already in progress."}
+    
+    download_url = ""
+    file_name = ""
+    if payload and payload.get("download_url"):
+        download_url = payload.get("download_url", "")
+        file_name = payload.get("file_name", "") or os.path.basename(urllib.parse.urlparse(download_url).path)
+    else:
+        status_info = get_update_status()
+        download_url = status_info.get("download_url", "")
+        file_name = status_info.get("asset_name", "")
+    
+    if not download_url:
+        raise HTTPException(status_code=400, detail="No suitable update asset available for your platform.")
+    
+    worker = threading.Thread(target=download_update_worker, args=(download_url, file_name), daemon=True)
+    worker.start()
+    return {"success": True, "message": "Download started.", "file_name": file_name}
+
+@app.get("/api/system/download-update-progress")
+def get_download_update_progress():
+    """Returns current state and byte progress of in-app update download."""
+    with UPDATE_DOWNLOAD_LOCK:
+        return dict(UPDATE_DOWNLOAD_STATE)
+
+@app.post("/api/system/launch-installer", dependencies=[Depends(verify_loopback_request)])
+def launch_installer():
+    """Launches the downloaded installer (.exe, .msi, or .dmg)."""
+    with UPDATE_DOWNLOAD_LOCK:
+        status = UPDATE_DOWNLOAD_STATE.get("status")
+        file_path = UPDATE_DOWNLOAD_STATE.get("file_path")
+    
+    if status != "completed" or not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=400, detail="No completed update package ready to install.")
+    
+    temp_dir = os.path.realpath(tempfile.gettempdir())
+    real_path = os.path.realpath(file_path)
+    if not real_path.startswith(temp_dir):
+        raise HTTPException(status_code=403, detail="Unauthorized installer location.")
+    
+    current_os = platform.system().lower()
+    try:
+        if current_os == "windows":
+            if file_path.lower().endswith(".msi"):
+                subprocess.Popen(["msiexec", "/i", file_path], shell=False)
+            else:
+                if hasattr(os, "startfile"):
+                    os.startfile(file_path)
+                else:
+                    subprocess.Popen([file_path], shell=False)
+        elif current_os == "darwin":
+            subprocess.Popen(["open", file_path], shell=False)
+        else:
+            subprocess.Popen(["xdg-open", file_path], shell=False)
+            
+        return {"success": True, "message": "Installer launched successfully."}
+    except Exception as e:
+        print(f"[engine] Failed to launch installer: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to launch installer: {e}")
 
 @app.post("/api/system/apply-update", dependencies=[Depends(verify_loopback_request)])
 def apply_update():
-    """Pulls latest updates from GitHub or returns direct package upgrade links."""
-    if getattr(sys, "frozen", False):
-        return {
-            "success": True,
-            "message": "Packaged desktop build detected. Please upgrade using the official installer release.",
-            "release_url": "https://github.com/thealiraza2/CapShorts/releases/latest"
-        }
+    """Backward compatible update router: initiates in-app download in packaged mode or runs git pull in dev."""
+    if getattr(sys, "frozen", False) or not os.path.exists(os.path.join(BASE_DIR, "..", ".git")):
+        return start_download_update()
+    
     try:
         project_root = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))
         if not os.path.exists(os.path.join(project_root, ".git")):
             project_root = os.path.abspath(os.path.join(BASE_DIR, ".."))
         
-        git_dir = os.path.join(project_root, ".git")
-        if os.path.exists(git_dir):
-            cmd = ["git", "pull", "origin", "main"]
-            proc = subprocess.run(
-                cmd,
-                cwd=project_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=60,
-                **SUBPROCESS_EXTRA_KWARGS
-            )
-            if proc.returncode != 0:
-                return {
-                    "success": False,
-                    "error": "Git pull operation was interrupted.",
-                    "message": "Git pull was interrupted. Please ensure your local files are saved."
-                }
-            
-            return {
-                "success": True,
-                "message": "CapShorts updated successfully! Reloading studio...",
-                "git_output": proc.stdout.strip(),
-                "action_required": "reload"
-            }
-        else:
-            return {
-                "success": True,
-                "is_packaged": True,
-                "message": "Opening latest MSI / DMG installer release page...",
-                "download_url": "https://github.com/thealiraza2/CapShorts/releases/latest",
-                "action_required": "download"
-            }
+        proc = subprocess.run(
+            ["git", "pull", "origin", "main"],
+            cwd=project_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+            **SUBPROCESS_EXTRA_KWARGS
+        )
+        if proc.returncode != 0:
+            return {"success": False, "error": "Git pull failed."}
+        return {"success": True, "message": "CapShorts updated successfully! Reloading studio...", "action_required": "reload"}
     except Exception as e:
-        print(f"[engine] Update failed: {e}")
-        return {"success": False, "error": "System update encountered an error."}
+        return {"success": False, "error": f"Update failed: {e}"}
 
 @app.get("/api/system/telemetry-stats")
 def get_telemetry_stats():
