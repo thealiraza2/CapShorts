@@ -83,26 +83,31 @@ def probe_video_dimensions(video_path: str) -> Tuple[int, int]:
         print(f"[engine] probe_video_dimensions error: {e}")
     return 1080, 1920
 
-LOCAL_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:1420",
-    "http://127.0.0.1:1420",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
-    "http://tauri.localhost",
-    "https://tauri.localhost",
-    "tauri://localhost",
-]
+LOCAL_ALLOWED_ORIGINS = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=LOCAL_ALLOWED_ORIGINS,
-    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|https?://tauri\.localhost|tauri://localhost)$",
+    allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
+    allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+@app.middleware("http")
+async def add_cors_and_pna_headers(request: Request, call_next):
+    # Handle Chromium Private Network Access (PNA) preflights
+    if request.method == "OPTIONS" and request.headers.get("access-control-request-private-network"):
+        response = JSONResponse(content={})
+        response.headers["Access-Control-Allow-Origin"] = request.headers.get("origin", "*")
+        response.headers["Access-Control-Allow-Methods"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+        return response
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
 
 # Base directory detection (handles PyInstaller standalone .exe as well as dev script)
 if getattr(sys, 'frozen', False):
@@ -1339,7 +1344,7 @@ def download_subtitles_file(filename: str):
     media_type = "application/x-subrip" if filename.endswith(".srt") else "text/vtt" if filename.endswith(".vtt") else "text/plain"
     return FileResponse(path, media_type=media_type, filename=os.path.basename(path))
 
-CURRENT_ENGINE_VERSION = "1.1.6"
+CURRENT_ENGINE_VERSION = "1.1.7"
 
 UPDATE_CACHE = {
     "last_checked": 0.0,

@@ -49,15 +49,28 @@ export const App: React.FC = () => {
     let isMounted = true;
     const checkHealth = async () => {
       try {
-        const res = await fetch(apiUrl('/api/health'));
-        if (res.ok) {
+        let res: Response | null = null;
+        try {
+          res = await fetch(apiUrl('/api/health'));
+        } catch (fetchErr) {
+          if (apiUrl('/api/health').includes('127.0.0.1')) {
+            try {
+              res = await fetch('http://localhost:8000/api/health');
+            } catch {
+              throw fetchErr;
+            }
+          } else {
+            throw fetchErr;
+          }
+        }
+        if (res && res.ok) {
           const data = await res.json();
           if (isMounted) setEngineHealth(data);
         } else {
           if (isMounted) {
             setEngineHealth({
               status: 'offline',
-              device: 'Offline (AI engine returned error)',
+              device: `Offline (HTTP ${res?.status || 500})`,
               cuda_available: false,
               whisper_available: false,
               ffmpeg_available: false,
@@ -65,11 +78,11 @@ export const App: React.FC = () => {
             });
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         if (isMounted) {
           setEngineHealth({
             status: 'offline',
-            device: 'Offline (AI engine not reachable)',
+            device: `Offline (${err?.message || 'Connecting...'})`,
             cuda_available: false,
             whisper_available: false,
             ffmpeg_available: false,
