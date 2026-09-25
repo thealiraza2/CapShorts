@@ -14,7 +14,7 @@ CapShorts is committed to ensuring the security and privacy of video creators wo
 If you discover a security vulnerability within CapShorts, please report it privately:
 
 1. **Do NOT open a public GitHub issue.**
-2. Send an email to the project maintainer at `security@capshorts.dev` (or open a private security advisory on GitHub).
+2. Send an email to the project maintainer at `thealiraza22@gmail.com` (or open a private security advisory on GitHub).
 3. Include detailed reproduction steps, proof of concept (PoC), and affected components (backend engine, Tauri frontend, or dependencies).
 
 We will review and acknowledge receipt of your report within 48 hours, validate the vulnerability, and issue a patched release promptly.
