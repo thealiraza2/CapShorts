@@ -7,8 +7,12 @@ import os
 import re
 import json
 import uuid
+import socket
+import ipaddress
+import hashlib
 import urllib.request
 import urllib.parse
+import urllib.error
 from typing import List, Dict, Any, Optional, Tuple
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache", "broll")
@@ -138,24 +142,66 @@ ALLOWED_BROLL_HOST_SUFFIXES = (
     "akamaized.net",
     ".mixkit.co",
     "mixkit.co",
+    ".vimeo.com",
+    "vimeo.com",
+    ".vimeoexternal.com",
+    "vimeoexternal.com",
 )
 MAX_BROLL_BYTES = 150 * 1024 * 1024  # 150 MB hard limit
+
+def is_ip_private_or_loopback(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
+    except ValueError:
+        return True
+
+def validate_broll_url(target_url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(target_url)
+        if parsed.scheme.lower() != "https":
+            return False
+        hostname = (parsed.hostname or "").lower()
+        if not hostname or any(blocked in hostname for blocked in ["localhost", "127.0.0.1", "169.254.", "0.0.0.0", "::1"]):
+            return False
+        if not any(hostname == allowed.lstrip(".") or hostname.endswith(allowed) for allowed in ALLOWED_BROLL_HOST_SUFFIXES):
+            return False
+        # Resolve hostname to verify IP addresses are not private / loopback
+        addr_info = socket.getaddrinfo(hostname, 443, proto=socket.IPPROTO_TCP)
+        for entry in addr_info:
+            ip_str = entry[4][0]
+            if is_ip_private_or_loopback(ip_str):
+                return False
+        return True
+    except Exception:
+        return False
+
+class SafeBrollRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not validate_broll_url(newurl):
+            print(f"[broll] Blocked unsafe redirect target: {newurl}")
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 def download_broll_clip(video_url: str, clip_id: str) -> Optional[str]:
     """
     Downloads remote broll clip to local cache directory if not already cached.
-    Includes strict SSRF validation, host allowlisting, streaming size limits, and atomic caching.
+    Includes strict SSRF validation, host allowlisting, streaming size limits, redirect protection, and atomic caching.
     """
     if not clip_id or not isinstance(clip_id, str):
         return None
+    if not video_url or not isinstance(video_url, str):
+        return None
 
-    # Sanitize clip_id to prevent path traversal
-    safe_id = "".join(c for c in clip_id if c.isalnum() or c in ("-", "_"))[:64]
+    # Sanitize clip_id to prevent path traversal and key by URL hash to prevent collision/poisoning
+    safe_id = "".join(c for c in clip_id if c.isalnum() or c in ("-", "_"))[:48]
     if not safe_id:
-        safe_id = f"broll_{uuid.uuid4().hex[:12]}"
+        safe_id = "broll"
+    url_hash = hashlib.sha256(video_url.encode("utf-8")).hexdigest()[:12]
+    cache_filename = f"{safe_id}_{url_hash}.mp4"
 
     resolved_cache_dir = os.path.realpath(CACHE_DIR)
-    cache_path = os.path.realpath(os.path.join(resolved_cache_dir, f"{safe_id}.mp4"))
+    cache_path = os.path.realpath(os.path.join(resolved_cache_dir, cache_filename))
     if not cache_path.startswith(resolved_cache_dir + os.sep):
         print(f"[broll] Path traversal rejected for clip_id: {clip_id}")
         return None
@@ -164,22 +210,8 @@ def download_broll_clip(video_url: str, clip_id: str) -> Optional[str]:
         return cache_path
 
     # SSRF & URL validation
-    try:
-        parsed = urllib.parse.urlparse(video_url)
-        if parsed.scheme.lower() != "https":
-            print(f"[broll] Rejected non-HTTPS B-roll URL: {video_url}")
-            return None
-
-        hostname = (parsed.hostname or "").lower()
-        if not hostname or any(blocked in hostname for blocked in ["localhost", "127.0.0.1", "169.254.", "0.0.0.0", "::1"]):
-            print(f"[broll] Blocked private/loopback SSRF address: {hostname}")
-            return None
-
-        if not any(hostname == allowed.lstrip(".") or hostname.endswith(allowed) for allowed in ALLOWED_BROLL_HOST_SUFFIXES):
-            print(f"[broll] Hostname '{hostname}' not in allowed B-roll sources")
-            return None
-    except Exception as e:
-        print(f"[broll] URL parsing error for {video_url}: {e}")
+    if not validate_broll_url(video_url):
+        print(f"[broll] Rejected disallowed or unsafe B-roll URL: {video_url}")
         return None
 
     temp_path = f"{cache_path}.tmp_{uuid.uuid4().hex[:8]}"
@@ -191,7 +223,8 @@ def download_broll_clip(video_url: str, clip_id: str) -> Optional[str]:
                 "Accept": "video/*,image/*,*/*"
             }
         )
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        opener = urllib.request.build_opener(SafeBrollRedirectHandler())
+        with opener.open(req, timeout=20) as resp:
             # Check content-length header if provided
             content_length = resp.headers.get("Content-Length")
             if content_length and int(content_length) > MAX_BROLL_BYTES:

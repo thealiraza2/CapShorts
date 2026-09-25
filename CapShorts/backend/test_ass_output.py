@@ -157,5 +157,72 @@ class TestTelemetryPrivacy(unittest.TestCase):
         self.assertTrue(manager.machine_id.startswith("anon_"))
 
 
+from pydantic import ValidationError
+from engine import resolve_video_file, VideoSegmentItem, ExportPayload, GenerateClipsPayload
+
+class TestPydanticValidation(unittest.TestCase):
+    def test_segment_item_invalid_range_raises(self):
+        with self.assertRaises(ValidationError):
+            VideoSegmentItem(start=10.0, end=5.0)
+        with self.assertRaises(ValidationError):
+            VideoSegmentItem(start=5.0, end=5.0)
+        seg = VideoSegmentItem(start=2.0, end=5.0)
+        self.assertEqual(seg.start, 2.0)
+        self.assertEqual(seg.end, 5.0)
+
+    def test_export_payload_invalid_clip_range_raises(self):
+        with self.assertRaises(ValidationError):
+            ExportPayload(
+                transcript=[],
+                preset={},
+                clip_start=15.0,
+                clip_end=10.0
+            )
+
+    def test_generate_clips_invalid_durations_raises(self):
+        with self.assertRaises(ValidationError):
+            GenerateClipsPayload(
+                words=[],
+                duration=60.0,
+                min_clip_duration=40.0,
+                max_clip_duration=20.0
+            )
+
+class TestVideoResolutionSecurity(unittest.TestCase):
+    def test_arbitrary_system_path_rejected(self):
+        with self.assertRaises(HTTPException):
+            resolve_video_file("C:\\Windows\\System32\\cmd.exe")
+        with self.assertRaises(HTTPException):
+            resolve_video_file("/etc/passwd")
+
+    def test_null_byte_blocked_in_containment(self):
+        test_dir = os.path.join(os.path.dirname(__file__), "temp")
+        with self.assertRaises(HTTPException):
+            get_safe_contained_path(test_dir, "video\x00.mp4")
+
+    def test_missing_path_rejected(self):
+        with self.assertRaises(HTTPException):
+            resolve_video_file(None)
+        with self.assertRaises(HTTPException):
+            resolve_video_file("")
+
+from broll import validate_broll_url
+
+class TestBrollValidation(unittest.TestCase):
+    def test_private_ip_rejected(self):
+        self.assertFalse(validate_broll_url("https://127.0.0.1/video.mp4"))
+        self.assertFalse(validate_broll_url("https://192.168.1.1/video.mp4"))
+        self.assertFalse(validate_broll_url("https://10.0.0.1/video.mp4"))
+
+    def test_disallowed_domain_rejected(self):
+        self.assertFalse(validate_broll_url("https://evil.com/video.mp4"))
+        self.assertFalse(validate_broll_url("https://attacker.org/test.mp4"))
+
+    def test_non_https_rejected(self):
+        self.assertFalse(validate_broll_url("http://pexels.com/video.mp4"))
+
+    def test_allowed_vimeo_domain_accepted(self):
+        self.assertTrue(validate_broll_url("https://player.vimeo.com/video/12345"))
+
 if __name__ == "__main__":
     unittest.main()

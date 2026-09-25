@@ -747,7 +747,7 @@ export const MediaLibraryPanel: React.FC = () => {
                 <input
                   type="range"
                   min="0"
-                  max="2"
+                  max="1"
                   step="0.05"
                   value={videoVolume}
                   onChange={(e) => setVideoVolume(parseFloat(e.target.value))}

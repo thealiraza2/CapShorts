@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Share2, CheckCircle2, Download, Sparkles, FolderDown, Zap, Flame, Loader2, FileText } from 'lucide-react';
+import { X, Share2, CheckCircle2, Download, Sparkles, FolderDown, Zap, Flame, Loader2, FileText, AlertTriangle, RotateCcw } from 'lucide-react';
 import { useVideoStore } from '../store/useVideoStore';
 import { apiUrl } from '../config';
 import templatesData from '../data/templates.json';
@@ -94,6 +94,7 @@ export const ExportModal: React.FC = () => {
   );
   const [exportingSubtitle, setExportingSubtitle] = useState<'srt' | 'vtt' | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -186,6 +187,7 @@ export const ExportModal: React.FC = () => {
 
   const handleStartExport = async () => {
     setIsExporting(true);
+    setExportError(null);
     setExportProgress(5, "Initializing Media Pipeline...");
     setExportResultUrl(null);
 
@@ -256,7 +258,9 @@ export const ExportModal: React.FC = () => {
         if (pollCount > maxPolls) {
           if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
           setIsExporting(false);
-          setExportProgress(0, 'Export timed out after 10 minutes.');
+          const errMsg = 'Export timed out after 10 minutes.';
+          setExportProgress(0, errMsg);
+          setExportError(errMsg);
           return;
         }
 
@@ -268,7 +272,9 @@ export const ExportModal: React.FC = () => {
             if (taskData.error || taskData.status?.toLowerCase().includes('error')) {
               if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
               setIsExporting(false);
-              setExportProgress(0, taskData.error || 'Render failed on engine');
+              const errMsg = taskData.error || 'Render failed on engine';
+              setExportProgress(0, errMsg);
+              setExportError(errMsg);
               return;
             }
 
@@ -291,7 +297,9 @@ export const ExportModal: React.FC = () => {
         clearInterval(pollIntervalRef.current);
       }
       setIsExporting(false);
-      setExportProgress(0, `Export failed: ${err?.message || 'Could not communicate with render engine.'}`);
+      const errMsg = `Export failed: ${err?.message || 'Could not communicate with render engine.'}`;
+      setExportProgress(0, errMsg);
+      setExportError(errMsg);
     }
   };
 
@@ -427,6 +435,27 @@ export const ExportModal: React.FC = () => {
                   <span>{isDownloading ? 'Saving...' : 'Save Video'}</span>
                 </button>
               )}
+            </div>
+          )}
+
+          {/* Export Error State Banner */}
+          {!isExporting && exportError && (
+            <div className="p-4 bg-red-950/40 border border-red-800/60 rounded-xl flex items-center justify-between text-red-200 animate-fade">
+              <div className="flex items-center space-x-2">
+                <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />
+                <div>
+                  <p className="font-bold text-red-300">Render Failed</p>
+                  <p className="text-[10px] text-red-400/90">{exportError}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleStartExport}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-red-800 hover:bg-red-700 text-white font-semibold transition-all active:scale-95 text-xs shadow-md shadow-red-950/40"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Retry Render</span>
+              </button>
             </div>
           )}
 

@@ -11,7 +11,7 @@ Generate word-accurate animated captions, extract viral vertical shorts, remove 
 [![Release](https://img.shields.io/github/v/release/thealiraza2/CapShorts?style=for-the-badge&color=00f2fe&logo=github)](https://github.com/thealiraza2/CapShorts/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20(Universal)-4facfe?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/thealiraza2/CapShorts/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-00c6ff?style=for-the-badge)](./LICENSE)
-[![Zero Setup](https://img.shields.io/badge/Setup-Zero%20Dependencies%20(Bundled)-6ee7b7?style=for-the-badge&logo=electron)](https://github.com/thealiraza2/CapShorts/releases/latest)
+[![Zero Setup](https://img.shields.io/badge/Setup-Zero%20Dependencies%20(Bundled)-6ee7b7?style=for-the-badge&logo=tauri)](https://github.com/thealiraza2/CapShorts/releases/latest)
 
 <br />
 
@@ -29,9 +29,9 @@ Ready-to-run desktop installers. **No Python, Git, or FFmpeg installation needed
 
 | Platform | Installer | Architecture | Download Link |
 | :--- | :--- | :--- | :--- |
-| **Windows** | `.exe` Setup | 64-bit (x86_64) | [**Download Setup (.exe)**](https://github.com/thealiraza2/CapShorts/releases/download/v1.1.2/CapShorts_1.1.2_x64-setup.exe) |
-| **Windows** | `.msi` Package | 64-bit Enterprise | [**Download MSI (.msi)**](https://github.com/thealiraza2/CapShorts/releases/download/v1.1.2/CapShorts_1.1.2_x64_en-US.msi) |
-| **macOS** | `.dmg` Universal | Apple Silicon (M1/M2/M3/M4) & Intel | [**Download Universal (.dmg)**](https://github.com/thealiraza2/CapShorts/releases/download/v1.1.2/CapShorts_1.1.2_universal.dmg) |
+| **Windows** | `.exe` Setup | 64-bit (x86_64) | [**Download Setup (.exe)**](https://github.com/thealiraza2/CapShorts/releases/download/v1.1.3/CapShorts_1.1.3_x64-setup.exe) |
+| **Windows** | `.msi` Package | 64-bit Enterprise | [**Download MSI (.msi)**](https://github.com/thealiraza2/CapShorts/releases/download/v1.1.3/CapShorts_1.1.3_x64_en-US.msi) |
+| **macOS** | `.dmg` Universal | Apple Silicon (M1/M2/M3/M4) & Intel | [**Download Universal (.dmg)**](https://github.com/thealiraza2/CapShorts/releases/download/v1.1.3/CapShorts_1.1.3_universal.dmg) |
 
 ---
 

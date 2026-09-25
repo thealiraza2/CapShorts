@@ -262,6 +262,7 @@ export const useVideoStore = create<VideoStoreState>((set, get) => ({
       videoUrl: url,
       videoName: vName,
       serverVideoPath: null,
+      isExporting: false,
       exportResultUrl: null,
       exportProgress: 0,
       exportStatus: 'Idle',

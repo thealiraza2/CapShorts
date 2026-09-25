@@ -26,7 +26,7 @@ SUBPROCESS_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.pl
 SUBPROCESS_EXTRA_KWARGS = {"creationflags": SUBPROCESS_FLAGS} if sys.platform == "win32" else {}
 
 from typing import List, Dict, Any, Optional, Tuple
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
@@ -38,7 +38,7 @@ from groq_transcribe import transcribe_with_groq_pool
 from transliterate import transliterate_transcript, transliterate_word
 from telemetry import telemetry
 
-app = FastAPI(title="CapShorts AI Engine", version="1.1.2")
+app = FastAPI(title="CapShorts AI Engine", version="1.1.3")
 
 def get_ffmpeg_bin() -> str:
     """Resolves platform-appropriate FFmpeg executable."""
@@ -57,7 +57,7 @@ def get_ffprobe_bin() -> str:
     return "ffprobe"
 
 def probe_video_dimensions(video_path: str) -> Tuple[int, int]:
-    """Probes video width and height using ffprobe."""
+    """Probes video width and height using ffprobe with timeout."""
     try:
         ffprobe_bin = get_ffprobe_bin()
         cmd = [
@@ -67,10 +67,12 @@ def probe_video_dimensions(video_path: str) -> Tuple[int, int]:
             "-of", "csv=s=x:p=0",
             video_path
         ]
-        out = subprocess.check_output(cmd, stderr=subprocess.PIPE, text=True, **SUBPROCESS_EXTRA_KWARGS).strip()
+        out = subprocess.check_output(cmd, stderr=subprocess.PIPE, text=True, timeout=10, **SUBPROCESS_EXTRA_KWARGS).strip()
         if "x" in out:
             w_str, h_str = out.split("x", 1)
             return int(w_str), int(h_str)
+    except subprocess.TimeoutExpired:
+        print(f"[engine] probe_video_dimensions timed out after 10s for: {video_path}")
     except Exception as e:
         print(f"[engine] probe_video_dimensions error: {e}")
     return 1080, 1920
@@ -120,17 +122,17 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 def get_safe_contained_path(base_dir: str, filename: str) -> str:
     """
     Validates and resolves a file path strictly within base_dir.
-    Rejects directory traversal sequences and absolute path escapes.
+    Rejects directory traversal sequences, embedded null bytes, and absolute path escapes.
     """
     if not filename or not isinstance(filename, str):
         raise HTTPException(status_code=400, detail="Filename cannot be empty")
 
     raw = filename.strip()
-    if ".." in raw or raw.startswith("/") or raw.startswith("\\") or (len(raw) > 1 and raw[1] == ":"):
+    if "\x00" in raw or ".." in raw or raw.startswith("/") or raw.startswith("\\") or (len(raw) > 1 and raw[1] == ":"):
         raise HTTPException(status_code=400, detail="Path traversal forbidden")
 
     clean_name = os.path.basename(raw.replace("\\", "/"))
-    if not clean_name or clean_name in (".", ".."):
+    if not clean_name or clean_name in (".", "..") or "\x00" in clean_name:
         raise HTTPException(status_code=400, detail="Invalid filename format")
     resolved_base = os.path.realpath(base_dir)
     target_path = os.path.realpath(os.path.join(resolved_base, clean_name))
@@ -141,14 +143,67 @@ def get_safe_contained_path(base_dir: str, filename: str) -> str:
 def verify_loopback_request(request: Request):
     """Ensures caller is strictly local machine loopback."""
     client_host = request.client.host if request.client else ""
-    if client_host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+    allowed_hosts = {"127.0.0.1", "::1", "localhost"}
+    if os.environ.get("CAPSHORTS_TESTING") == "1":
+        allowed_hosts.add("testclient")
+    if client_host not in allowed_hosts:
         raise HTTPException(status_code=403, detail="Remote network access forbidden. Local loopback only.")
 
-# Asynchronous Tasks & Thread Locks
+# Daemon Session Token Authentication (0600 file in ~/.capshorts)
+CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".capshorts")
+SESSION_TOKEN_PATH = os.path.join(CONFIG_DIR, "session_token")
+
+def get_or_create_session_token() -> str:
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    if os.path.exists(SESSION_TOKEN_PATH):
+        try:
+            with open(SESSION_TOKEN_PATH, "r", encoding="utf-8") as f:
+                t = f.read().strip()
+                if len(t) >= 32:
+                    return t
+        except Exception:
+            pass
+    token = uuid.uuid4().hex + uuid.uuid4().hex
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        mode = 0o600
+        fd = os.open(SESSION_TOKEN_PATH, flags, mode)
+        with open(fd, "w", encoding="utf-8") as f:
+            f.write(token)
+    except Exception as e:
+        print(f"[engine] Warning: Could not write session token: {e}")
+    return token
+
+ACTIVE_SESSION_TOKEN = get_or_create_session_token()
+
+# Asynchronous Tasks, Concurrency Control & Thread Locks
+MAX_CONCURRENT_EXPORTS = max(1, min(4, (os.cpu_count() or 2) - 1))
+EXPORT_SEMAPHORE = threading.Semaphore(MAX_CONCURRENT_EXPORTS)
+MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB streaming ceiling
+TASK_TTL_SECONDS = 1800  # 30 minutes
+MAX_TASK_ENTRIES = 200
+
 EXPORT_TASKS: Dict[str, Dict[str, Any]] = {}
 TRANSCRIBE_JOBS: Dict[str, Dict[str, Any]] = {}
 MODEL_LOAD_LOCK = threading.Lock()
 TRANSCRIBE_LOCK = threading.Lock()
+
+def prune_stale_tasks(task_dict: Dict[str, Dict[str, Any]]):
+    """Evicts completed or failed tasks older than 30 minutes, or oldest if size exceeds cap."""
+    now = time.time()
+    stale_keys = []
+    for tid, info in list(task_dict.items()):
+        status = str(info.get("status", "")).lower()
+        created_at = info.get("_created_at", 0)
+        if (now - created_at > TASK_TTL_SECONDS) and ("processing" not in status and "encoding" not in status):
+            stale_keys.append(tid)
+    for k in stale_keys:
+        task_dict.pop(k, None)
+    if len(task_dict) > MAX_TASK_ENTRIES:
+        sorted_keys = sorted(task_dict.keys(), key=lambda k: task_dict[k].get("_created_at", 0))
+        for k in sorted_keys[:len(task_dict) - MAX_TASK_ENTRIES]:
+            if "processing" not in str(task_dict[k].get("status", "")).lower():
+                task_dict.pop(k, None)
 
 # High-impact viral keywords for auto-highlighting
 VIRAL_KEYWORDS = {
@@ -238,12 +293,12 @@ def save_master_groq_key(new_key: str):
                 pass
 
 def check_ffmpeg() -> bool:
-    """Checks whether ffmpeg executable is available in PATH or local directory."""
+    """Checks whether ffmpeg executable is available in PATH or local directory with timeout."""
     ffmpeg_bin = get_ffmpeg_bin()
     try:
-        res = subprocess.run([ffmpeg_bin, "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, **SUBPROCESS_EXTRA_KWARGS)
+        res = subprocess.run([ffmpeg_bin, "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, **SUBPROCESS_EXTRA_KWARGS)
         return res.returncode == 0
-    except Exception:
+    except (subprocess.TimeoutExpired, Exception):
         alt_paths = [
             r"C:\ProgramData\chocolatey\bin\ffmpeg.exe",
             r"C:\ffmpeg\bin\ffmpeg.exe",
@@ -261,8 +316,8 @@ LOCAL_BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model
 
 def get_whisper_model(model_size: str = "base"):
     """Thread-safe loader for faster-whisper model."""
-    # Normalize model size for offline faster-whisper engine
-    if not model_size or "turbo" in model_size or "large" in model_size or model_size not in ["tiny", "base", "small", "medium", "large"]:
+    # Normalize model size for offline faster-whisper engine (preserves large model selection)
+    if not model_size or "turbo" in model_size or model_size not in ["tiny", "base", "small", "medium", "large"]:
         model_size = "base"
 
     with MODEL_LOAD_LOCK:
@@ -319,36 +374,37 @@ def detect_hardware_encoder() -> Tuple[str, List[str]]:
       5. libx264 (CPU fallback)
     """
     global CACHED_HW_ENCODER
-    if CACHED_HW_ENCODER is not None:
-        return CACHED_HW_ENCODER
-
-    ffmpeg_bin = get_ffmpeg_bin()
-
-    candidates = [
-        ("h264_videotoolbox", ["-c:v", "h264_videotoolbox", "-b:v", "6000k"]),
-        ("h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr"]),
-        ("h264_qsv", ["-c:v", "h264_qsv", "-global_quality", "23"]),
-        ("h264_amf", ["-c:v", "h264_amf", "-quality", "speed"]),
-        ("h264_mf", ["-c:v", "h264_mf", "-rate_control", "cbr", "-b:v", "5000k"]),
-        ("libx264", ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]),
-    ]
-
-    for name, args in candidates:
-        if name == "libx264":
-            CACHED_HW_ENCODER = (name, args)
+    with MODEL_LOAD_LOCK:
+        if CACHED_HW_ENCODER is not None:
             return CACHED_HW_ENCODER
-        try:
-            test_cmd = [ffmpeg_bin, "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.05"] + args + ["-f", "null", "-"]
-            res = subprocess.run(test_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3, **SUBPROCESS_EXTRA_KWARGS)
-            if res.returncode == 0:
-                print(f"[engine] GPU Hardware Encoder verified: {name}")
+
+        ffmpeg_bin = get_ffmpeg_bin()
+
+        candidates = [
+            ("h264_videotoolbox", ["-c:v", "h264_videotoolbox", "-b:v", "6000k"]),
+            ("h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr"]),
+            ("h264_qsv", ["-c:v", "h264_qsv", "-global_quality", "23"]),
+            ("h264_amf", ["-c:v", "h264_amf", "-quality", "speed"]),
+            ("h264_mf", ["-c:v", "h264_mf", "-rate_control", "cbr", "-b:v", "5000k"]),
+            ("libx264", ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]),
+        ]
+
+        for name, args in candidates:
+            if name == "libx264":
                 CACHED_HW_ENCODER = (name, args)
                 return CACHED_HW_ENCODER
-        except Exception:
-            pass
+            try:
+                test_cmd = [ffmpeg_bin, "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.05"] + args + ["-f", "null", "-"]
+                res = subprocess.run(test_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3, **SUBPROCESS_EXTRA_KWARGS)
+                if res.returncode == 0:
+                    print(f"[engine] GPU Hardware Encoder verified: {name}")
+                    CACHED_HW_ENCODER = (name, args)
+                    return CACHED_HW_ENCODER
+            except Exception:
+                pass
 
-    CACHED_HW_ENCODER = ("libx264", ["-c:v", "libx264", "-preset", "fast", "-crf", "18"])
-    return CACHED_HW_ENCODER
+        CACHED_HW_ENCODER = ("libx264", ["-c:v", "libx264", "-preset", "fast", "-crf", "18"])
+        return CACHED_HW_ENCODER
 
 @app.get("/api/health")
 def health_check():
@@ -357,15 +413,15 @@ def health_check():
     try:
         import ctranslate2
         has_cuda = ctranslate2.get_cuda_device_count() > 0
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[health] ctranslate2 diagnostic notice: {e}")
 
     has_whisper = False
     try:
         import faster_whisper
         has_whisper = True
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[health] faster_whisper diagnostic notice: {e}")
 
     has_ffmpeg = check_ffmpeg()
     master_keys = get_master_groq_keys()
@@ -565,12 +621,7 @@ def run_transcribe_job(
                         })
 
             if not words_result:
-                if target_video and os.path.exists(target_video):
-                    raise RuntimeError("No speech could be extracted from this audio file. Please check audio volume and quality.")
-                else:
-                    words_result = generate_demo_transcript()
-
-            words_result = tag_keywords(words_result)
+                raise RuntimeError("No speech could be extracted from this audio file. Please check audio volume and quality.")
 
             if language in ["urdu", "ur", "roman", "roman_urdu"]:
                 words_result = transliterate_transcript(words_result)
@@ -593,7 +644,7 @@ def run_transcribe_job(
                 "words": words_result,
                 "clips": clips_result,
                 "duration": video_duration,
-                "video_path": target_video
+                "video_path": os.path.basename(target_video)
             }
             try:
                 telemetry.record_transcribe()
@@ -602,23 +653,52 @@ def run_transcribe_job(
 
         except Exception as e:
             print(f"[engine] Transcribe job error: {e}")
+            err_msg = str(e) if "No speech could be extracted" in str(e) else "Transcription failed. Please check audio quality and format."
             TRANSCRIBE_JOBS[task_id] = {
                 "progress": 100,
-                "step": f"Transcription error: {str(e)}",
+                "step": err_msg,
                 "status": "failed",
-                "error": str(e),
+                "error": err_msg,
                 "words": [],
                 "clips": []
             }
         finally:
+            prune_stale_tasks(TRANSCRIBE_JOBS)
             if audio_wav and os.path.exists(audio_wav) and audio_wav != target_video:
                 try:
                     os.remove(audio_wav)
                 except Exception:
                     pass
 
+def save_upload_file_capped(upload_file: UploadFile, destination_path: str, max_bytes: int = MAX_UPLOAD_BYTES):
+    """Safely streams upload file to destination up to max_bytes cap, cleaning up on overflow."""
+    total_written = 0
+    try:
+        with open(destination_path, "wb") as buffer:
+            while True:
+                chunk = upload_file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_written += len(chunk)
+                if total_written > max_bytes:
+                    buffer.close()
+                    try:
+                        os.remove(destination_path)
+                    except Exception:
+                        pass
+                    raise HTTPException(status_code=413, detail=f"File exceeds maximum allowed upload size ({max_bytes // (1024 * 1024 * 1024)} GB)")
+                buffer.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            os.remove(destination_path)
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="Failed to save uploaded video file")
+
 @app.post("/api/transcribe")
-async def start_transcription(
+def start_transcription(
     background_tasks: BackgroundTasks,
     file: Optional[UploadFile] = File(None),
     video_path: Optional[str] = Form(None),
@@ -628,34 +708,27 @@ async def start_transcription(
     range_mode: str = Form("full")
 ):
     """
-    Asynchronously begins transcribing video speech and extracting viral shorts.
+    Begins transcribing video speech and extracting viral shorts via threadpool background worker.
     Automatically utilizes Master Key pool or user-supplied key for CapCut speed.
     """
+    prune_stale_tasks(TRANSCRIBE_JOBS)
     task_id = str(uuid.uuid4())[:8]
     target_video = None
 
     if file:
         file_ext = os.path.splitext(file.filename or ".mp4")[1]
         target_video = os.path.join(TEMP_DIR, f"input_{task_id}{file_ext}")
-        with open(target_video, "wb") as f:
-            shutil.copyfileobj(file.file, f)
-    elif video_path and os.path.exists(video_path):
-        target_video = video_path
+        save_upload_file_capped(file, target_video)
+    elif video_path:
+        target_video = resolve_video_file(video_path)
     else:
-        demo_words = generate_demo_transcript()
-        clips = detect_viral_clips(demo_words, total_duration=demo_words[-1]["end"])
-        return {
-            "status": "success",
-            "task_id": "demo",
-            "words": demo_words,
-            "clips": clips,
-            "duration": demo_words[-1]["end"]
-        }
+        raise HTTPException(status_code=400, detail="No video file or video_path provided")
 
     TRANSCRIBE_JOBS[task_id] = {
         "progress": 5,
         "step": "Video uploaded. Initializing audio pipeline...",
-        "status": "processing"
+        "status": "processing",
+        "_created_at": time.time()
     }
 
     background_tasks.add_task(
@@ -667,20 +740,20 @@ async def start_transcription(
         groq_api_key,
         range_mode
     )
-    return {"status": "started", "task_id": task_id, "video_path": target_video}
+    return {"status": "started", "task_id": task_id, "video_path": os.path.basename(target_video)}
 
 @app.post("/api/upload-video")
-async def upload_video_file(file: UploadFile = File(...)):
-    """Receives and caches video file on server for editing and export."""
+def upload_video_file(file: UploadFile = File(...)):
+    """Receives and caches video file on server for editing and export in threadpool."""
     task_id = str(uuid.uuid4())[:8]
-    file_ext = os.path.splitext(file.filename or ".mp4")[1]
+    clean_name = os.path.basename((file.filename or "video.mp4").strip().replace("\\", "/"))
+    file_ext = os.path.splitext(clean_name)[1] or ".mp4"
     target_video = os.path.join(TEMP_DIR, f"input_{task_id}{file_ext}")
-    with open(target_video, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    save_upload_file_capped(file, target_video)
     return {
         "status": "success",
-        "video_path": target_video,
-        "filename": file.filename
+        "video_path": os.path.basename(target_video),
+        "filename": clean_name
     }
 
 @app.get("/api/transcribe/progress/{task_id}")
@@ -702,10 +775,17 @@ def save_master_key_api(payload: MasterKeyPayload):
 
 class GenerateClipsPayload(BaseModel):
     words: List[Dict[str, Any]]
-    duration: float
-    min_clip_duration: Optional[float] = 25.0
-    max_clip_duration: Optional[float] = 60.0
-    target_clips_count: Optional[int] = 5
+    duration: float = Field(ge=0.0)
+    min_clip_duration: Optional[float] = Field(default=25.0, gt=0.0)
+    max_clip_duration: Optional[float] = Field(default=60.0, gt=0.0)
+    target_clips_count: Optional[int] = Field(default=5, ge=1)
+
+    @model_validator(mode="after")
+    def validate_durations(self):
+        if self.min_clip_duration is not None and self.max_clip_duration is not None:
+            if self.max_clip_duration < self.min_clip_duration:
+                raise ValueError("max_clip_duration must be greater than or equal to min_clip_duration")
+        return self
 
 @app.post("/api/clips/generate")
 def generate_clips_endpoint(payload: GenerateClipsPayload):
@@ -713,9 +793,9 @@ def generate_clips_endpoint(payload: GenerateClipsPayload):
     clips = detect_viral_clips(
         words=payload.words,
         total_duration=payload.duration,
-        min_clip_duration=payload.min_clip_duration or 25.0,
-        max_clip_duration=payload.max_clip_duration or 60.0,
-        target_clips_count=payload.target_clips_count or 5
+        min_clip_duration=payload.min_clip_duration if payload.min_clip_duration is not None else 25.0,
+        max_clip_duration=payload.max_clip_duration if payload.max_clip_duration is not None else 60.0,
+        target_clips_count=payload.target_clips_count if payload.target_clips_count is not None else 5
     )
     return {"status": "success", "clips": clips}
 
@@ -756,16 +836,36 @@ class ExportPayload(BaseModel):
     custom_overrides: Optional[Dict[str, Any]] = None
     broll_clips: Optional[List[Dict[str, Any]]] = None
     output_filename: Optional[str] = "capshorts_export.mp4"
-    clip_start: Optional[float] = None
-    clip_end: Optional[float] = None
+    clip_start: Optional[float] = Field(default=None, ge=0.0)
+    clip_end: Optional[float] = Field(default=None, ge=0.0)
     resolution: Optional[str] = "1080x1920"
     aspect_ratio: Optional[str] = "9:16"
 
+    @model_validator(mode="after")
+    def validate_clip_range(self):
+        if self.clip_start is not None and self.clip_end is not None:
+            if self.clip_end <= self.clip_start:
+                raise ValueError("Export 'clip_end' must be strictly greater than 'clip_start'")
+        return self
+
 def run_export_job(task_id: str, payload: ExportPayload):
     """Background task executing FFmpeg ASS subtitle burning, clip trimming, dynamic scaling, and B-roll composite."""
-    EXPORT_TASKS[task_id] = {"progress": 10, "status": "Generating Subtitles (.ass)...", "error": None}
+    if not EXPORT_SEMAPHORE.acquire(timeout=2.0):
+        EXPORT_TASKS[task_id] = {
+            "progress": 100,
+            "status": "Export Error: Maximum concurrent export limit reached. Please try again shortly.",
+            "error": "Maximum concurrent export limit reached."
+        }
+        return
+
     ass_path = None
     try:
+        prune_stale_tasks(EXPORT_TASKS)
+        EXPORT_TASKS[task_id] = {"progress": 10, "status": "Generating Subtitles (.ass)...", "error": None, "_created_at": time.time()}
+
+        if not check_ffmpeg():
+            raise RuntimeError("FFmpeg is not installed or not found on system PATH. Please install FFmpeg to export videos.")
+
         transcript_to_use = payload.transcript
         is_clip_export = payload.clip_start is not None and payload.clip_end is not None and payload.clip_end > payload.clip_start
 
@@ -788,23 +888,10 @@ def run_export_job(task_id: str, payload: ExportPayload):
         output_file = get_safe_contained_path(OUTPUT_DIR, f"export_{task_id}_{safe_output_name}")
         ffmpeg_bin = get_ffmpeg_bin()
 
-        # Resolve input video safely
-        resolved_input = None
-        if payload.video_path:
-            if os.path.isabs(payload.video_path) and os.path.exists(payload.video_path):
-                resolved_input = payload.video_path
-            else:
-                clean_in = os.path.basename(payload.video_path.strip().replace("\\", "/"))
-                for check_dir in [TEMP_DIR, OUTPUT_DIR]:
-                    cand = os.path.join(check_dir, clean_in)
-                    if os.path.exists(cand):
-                        resolved_input = cand
-                        break
-
-        if not resolved_input or not os.path.exists(resolved_input):
-            raise FileNotFoundError(f"Input video file was not found or is inaccessible: {payload.video_path}")
-
-        input_video = resolved_input
+        # Resolve input video safely strictly within approved directories
+        if not payload.video_path:
+            raise HTTPException(status_code=400, detail="Missing video path for export")
+        input_video = resolve_video_file(payload.video_path)
 
         # Probe input video dimensions
         in_w, in_h = probe_video_dimensions(input_video) if os.path.exists(input_video) else (1080, 1920)
@@ -869,6 +956,8 @@ def run_export_job(task_id: str, payload: ExportPayload):
         # Ultra-fast cinematic background blur: downscale to 270x480, single light blur pass, scale to 1080x1920 (16x faster render)
         fast_vert_blur = "[bg]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:1,scale=1080:1920[bg_b]"
 
+        filter_args = []
+        extra_inputs = []
         if downloaded_broll:
             extra_inputs, filter_chains, last_stream = build_ffmpeg_broll_filter(downloaded_broll)
             if is_vertical_short and is_landscape_input:
@@ -877,66 +966,44 @@ def run_export_job(task_id: str, payload: ExportPayload):
             else:
                 full_filter = f"{filter_chains};{last_stream}ass='{escaped_ass}'[vfinal]"
 
-            cmd = [ffmpeg_bin, "-y"] + trim_args + ["-i", input_video] + extra_inputs + [
+            filter_args = [
                 "-filter_complex", full_filter,
                 "-map", "[vfinal]",
                 "-map", "0:a?"
-            ] + hw_args + [
-                "-c:a", "aac",
-                output_file
+            ]
+        elif is_vertical_short and is_landscape_input:
+            vert_filter = f"[0:v]split=2[fg][bg];{fast_vert_blur};[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg_s];[bg_b][fg_s]overlay=(W-w)/2:(H-h)/2[vcomp];[vcomp]ass='{escaped_ass}'[vfinal]"
+            filter_args = [
+                "-filter_complex", vert_filter,
+                "-map", "[vfinal]",
+                "-map", "0:a?"
             ]
         else:
-            if is_vertical_short and is_landscape_input:
-                vert_filter = f"[0:v]split=2[fg][bg];{fast_vert_blur};[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg_s];[bg_b][fg_s]overlay=(W-w)/2:(H-h)/2[vcomp];[vcomp]ass='{escaped_ass}'[vfinal]"
-                cmd = [
-                    ffmpeg_bin, "-y"
-                ] + trim_args + [
-                    "-i", input_video,
-                    "-filter_complex", vert_filter,
-                    "-map", "[vfinal]",
-                    "-map", "0:a?"
-                ] + hw_args + [
-                    "-c:a", "aac",
-                    output_file
-                ]
-            else:
-                cmd = [
-                    ffmpeg_bin, "-y"
-                ] + trim_args + [
-                    "-i", input_video,
-                    "-vf", f"ass='{escaped_ass}'"
-                ] + hw_args + [
-                    "-c:a", "aac",
-                    output_file
-                ]
+            filter_args = [
+                "-vf", f"ass='{escaped_ass}'"
+            ]
 
-        if check_ffmpeg():
+        base_cmd = [ffmpeg_bin, "-y"] + trim_args + ["-i", input_video] + extra_inputs + filter_args
+        cmd = base_cmd + hw_args + ["-c:a", "aac", output_file]
+
+        try:
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300, **SUBPROCESS_EXTRA_KWARGS)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("FFmpeg video render timed out after 300 seconds.")
+
+        if proc.returncode != 0:
+            print(f"[export] FFmpeg error ({hw_encoder_name}): {proc.stderr.decode('utf-8', errors='ignore')}")
+            # Fallback to software libx264 if hardware encoder fails during render, retaining all filters & B-roll
+            print("[export] Retrying with CPU libx264 fallback...")
+            cpu_args = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "20"]
+            fb_cmd = base_cmd + cpu_args + ["-c:a", "aac", output_file]
             try:
-                proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300, **SUBPROCESS_EXTRA_KWARGS)
+                proc2 = subprocess.run(fb_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300, **SUBPROCESS_EXTRA_KWARGS)
             except subprocess.TimeoutExpired:
-                raise RuntimeError("FFmpeg video render timed out after 300 seconds.")
+                raise RuntimeError("FFmpeg software fallback timed out after 300 seconds.")
 
-            if proc.returncode != 0:
-                print(f"[export] FFmpeg error ({hw_encoder_name}): {proc.stderr.decode('utf-8', errors='ignore')}")
-                # Fallback to software libx264 if hardware encoder fails during render
-                print("[export] Retrying with CPU libx264 fallback...")
-                fb_cmd = [ffmpeg_bin, "-y"] + trim_args + ["-i", input_video]
-                if is_vertical_short and is_landscape_input:
-                    vert_filter = f"[0:v]split=2[fg][bg];{fast_vert_blur};[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg_s];[bg_b][fg_s]overlay=(W-w)/2:(H-h)/2[vcomp];[vcomp]ass='{escaped_ass}'[vfinal]"
-                    fb_cmd += ["-filter_complex", vert_filter, "-map", "[vfinal]", "-map", "0:a?"]
-                else:
-                    fb_cmd += ["-vf", f"ass='{escaped_ass}'"]
-                fb_cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-c:a", "aac", output_file]
-                try:
-                    proc2 = subprocess.run(fb_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300, **SUBPROCESS_EXTRA_KWARGS)
-                except subprocess.TimeoutExpired:
-                    raise RuntimeError("FFmpeg software fallback timed out after 300 seconds.")
-
-                if proc2.returncode != 0:
-                    raise RuntimeError("FFmpeg render failed on both hardware and software encoders.")
-        else:
-            time.sleep(2.0)
-            shutil.copy(input_video, output_file)
+            if proc2.returncode != 0:
+                raise RuntimeError("FFmpeg render failed on both hardware and software encoders.")
 
         EXPORT_TASKS[task_id] = {
             "progress": 100,
@@ -956,6 +1023,8 @@ def run_export_job(task_id: str, payload: ExportPayload):
             "error": str(e)
         }
     finally:
+        EXPORT_SEMAPHORE.release()
+        prune_stale_tasks(EXPORT_TASKS)
         if ass_path and os.path.exists(ass_path):
             try:
                 os.remove(ass_path)
@@ -989,14 +1058,14 @@ def convert_script(payload: ScriptConvertPayload):
     return {"words": payload.words}
 
 def resolve_video_file(path: Optional[str]) -> str:
-    """Helper to resolve a video file path safely within approved directories."""
+    """Helper to resolve a video file path safely strictly within approved directories (TEMP_DIR, OUTPUT_DIR)."""
     if not path or not isinstance(path, str):
         raise HTTPException(status_code=400, detail="Missing video path")
-    if os.path.isabs(path) and os.path.exists(path):
-        return path
     clean_name = os.path.basename(path.strip().replace("\\", "/"))
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Invalid video path")
     for d in [TEMP_DIR, OUTPUT_DIR]:
-        cand = os.path.join(d, clean_name)
+        cand = get_safe_contained_path(d, clean_name)
         if os.path.exists(cand):
             return cand
     raise HTTPException(status_code=404, detail="Video file not found")
@@ -1016,8 +1085,8 @@ def detect_silence(payload: SilenceDetectPayload):
     ffmpeg_bin = get_ffmpeg_bin()
     video_file = resolve_video_file(payload.video_path)
             
-    thresh = payload.noise_threshold_db or -30.0
-    min_dur = payload.min_duration or 0.5
+    thresh = payload.noise_threshold_db if payload.noise_threshold_db is not None else -30.0
+    min_dur = payload.min_duration if payload.min_duration is not None else 0.5
 
     cmd = [
         ffmpeg_bin, "-vn", "-i", video_file,
@@ -1067,8 +1136,14 @@ def detect_silence(payload: SilenceDetectPayload):
         raise HTTPException(status_code=500, detail=f"Silence detection failed: {str(e)}")
 
 class VideoSegmentItem(BaseModel):
-    start: float
-    end: float
+    start: float = Field(ge=0.0)
+    end: float = Field(ge=0.0)
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if self.end <= self.start:
+            raise ValueError("Segment 'end' must be strictly greater than 'start'")
+        return self
 
 class VideoSplitPayload(BaseModel):
     video_path: Optional[str] = None
@@ -1092,6 +1167,8 @@ def split_video_segments(payload: VideoSplitPayload):
         safe_out_name += ".mp4"
     out_path = get_safe_contained_path(OUTPUT_DIR, safe_out_name)
 
+    chunk_files = []
+    concat_list_path = None
     try:
         # Case 1: Single segment trim (instant -c copy)
         if len(payload.segments) == 1:
@@ -1110,7 +1187,6 @@ def split_video_segments(payload: VideoSplitPayload):
                 raise Exception(f"FFmpeg copy error: {res.stderr.decode('utf-8', errors='ignore')}")
         else:
             # Case 2: Multiple segments (ripple-concatenation without re-encoding)
-            chunk_files = []
             for idx, seg in enumerate(payload.segments):
                 chunk_name = f"chunk_{uuid.uuid4().hex[:8]}_{idx}.mp4"
                 chunk_path = os.path.join(TEMP_DIR, chunk_name)
@@ -1147,18 +1223,6 @@ def split_video_segments(payload: VideoSplitPayload):
                 out_path
             ]
             res = subprocess.run(concat_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, **SUBPROCESS_EXTRA_KWARGS)
-
-            # Cleanup temp chunk files
-            for cf in chunk_files:
-                try:
-                    os.remove(cf)
-                except Exception:
-                    pass
-            try:
-                os.remove(concat_list_path)
-            except Exception:
-                pass
-
             if res.returncode != 0:
                 raise Exception(f"FFmpeg concat error: {res.stderr.decode('utf-8', errors='ignore')}")
 
@@ -1166,19 +1230,32 @@ def split_video_segments(payload: VideoSplitPayload):
         return {
             "status": "success",
             "output_path": out_path,
-            "filename": out_name,
-            "download_url": f"/api/download/{out_name}",
+            "filename": safe_out_name,
+            "download_url": f"/api/download/{safe_out_name}",
             "segments_count": len(payload.segments),
             "total_duration": total_dur
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Stream copy split failed: {str(e)}")
+    finally:
+        for cf in chunk_files:
+            try:
+                if os.path.exists(cf):
+                    os.remove(cf)
+            except Exception:
+                pass
+        if concat_list_path and os.path.exists(concat_list_path):
+            try:
+                os.remove(concat_list_path)
+            except Exception:
+                pass
 
 @app.post("/api/export")
 def start_export(payload: ExportPayload, background_tasks: BackgroundTasks):
     """Triggers asynchronous video rendering with live progress tracking."""
+    prune_stale_tasks(EXPORT_TASKS)
     task_id = str(uuid.uuid4())[:8]
-    EXPORT_TASKS[task_id] = {"progress": 0, "status": "Queued...", "error": None}
+    EXPORT_TASKS[task_id] = {"progress": 0, "status": "Queued...", "error": None, "_created_at": time.time()}
     background_tasks.add_task(run_export_job, task_id, payload)
     return {"status": "started", "task_id": task_id}
 
@@ -1194,8 +1271,8 @@ class SubtitleExportPayload(BaseModel):
     format: str = "srt"  # "srt", "vtt", or "ass"
     preset: Optional[Dict[str, Any]] = None
     custom_overrides: Optional[Dict[str, Any]] = None
-    video_width: int = 1080
-    video_height: int = 1920
+    video_width: int = Field(default=1080, gt=0)
+    video_height: int = Field(default=1920, gt=0)
 
 @app.post("/api/export-subtitles")
 def export_subtitles(payload: SubtitleExportPayload):
@@ -1259,7 +1336,7 @@ def get_update_status():
     git_dir = os.path.join(project_root, ".git")
     is_git_repo = os.path.exists(git_dir)
     
-    current_version = "1.1.2"
+    current_version = "1.1.3"
     current_commit = "unknown"
     latest_commit = "unknown"
     update_available = False
