@@ -895,7 +895,7 @@ export const CapShortsStudio: React.FC = () => {
         <div className="cs-spacer"></div>
 
         {/* Right side: NO AI Engine Text and NO Status Dot */}
-        <div className="cs-concept-tag">V1.1.8</div>
+        <div className="cs-concept-tag">V1.1.9</div>
         <div className="cs-saved" id="savedInd">
           <i></i>
           <span>Saved</span>

@@ -44,7 +44,7 @@ from groq_transcribe import transcribe_with_groq_pool
 from transliterate import transliterate_transcript, transliterate_word
 from telemetry import telemetry
 
-app = FastAPI(title="CapShorts AI Engine", version="1.1.8")
+app = FastAPI(title="CapShorts AI Engine", version="1.1.9")
 
 def get_ffmpeg_bin() -> str:
     """Resolves platform-appropriate FFmpeg executable."""
