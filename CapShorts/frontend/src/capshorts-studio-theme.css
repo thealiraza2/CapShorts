@@ -1,0 +1,670 @@
+/* === CapShorts Studio theme (v4.1) — inlined === */
+/* ============================================================================
+   CapShorts "Studio" Theme — v4.1 AI Pro
+   ----------------------------------------------------------------------------
+   Drop-in dark professional theme for the CapShorts Tauri frontend.
+   Inspired by CapCut / Filmora: neutral near-black surfaces, one blue accent,
+   flat cards, 1px borders, dense pro layout.
+
+   USAGE
+   1. <link rel="stylesheet" href="capshorts-studio-theme.css">
+   2. Wrap your app root in <div class="cs-app"> … </div>
+   3. Use the cs-* classes documented in COMPONENT_SPEC.md.
+   4. All classes are prefixed `cs-` so they never clash with Tailwind.
+
+   The theme is intentionally framework-agnostic (React / Vue / Svelte /
+   vanilla). Pair it with your own state logic; see COMPONENT_SPEC.md §5
+   for the behaviour contracts (playback, karaoke, AI fixes, export…).
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. DESIGN TOKENS
+   Change the look of the whole app by editing only this block.
+   -------------------------------------------------------------------------- */
+:root {
+  /* Surfaces — warm-neutral near-black scale */
+  --cs-bg-0:        #0E0E0E;   /* app background            */
+  --cs-bg-1:        #161616;   /* top bar / rails / panels  */
+  --cs-bg-2:        #131313;   /* track headers             */
+  --cs-card:        #1D1D1D;   /* cards, rows               */
+  --cs-card-2:      #242424;   /* hover / active surfaces   */
+  --cs-inset:       #101010;   /* inputs, segmented, ruler  */
+  --cs-lane:        #0C0C0C;   /* timeline lane background  */
+  --cs-stage:       #0A0A0A;   /* preview stage background  */
+
+  /* Borders */
+  --cs-border:      rgba(255, 255, 255, .08);
+  --cs-border-2:    rgba(255, 255, 255, .15);
+
+  /* Text */
+  --cs-text:        #F2F2F2;
+  --cs-muted:       #9C9C9C;
+  --cs-faint:       #6F6F6F;
+
+  /* Accent — CapCut blue. The ONLY brand colour in the UI. */
+  --cs-accent:      #2E7CF6;
+  --cs-accent-2:    #5B9BFF;
+  --cs-accent-dim:  rgba(46, 124, 246, .14);
+
+  /* Semantic */
+  --cs-green:       #34D399;   /* audio waveform, success   */
+  --cs-red:         #F43F5E;   /* silence regions, danger   */
+  --cs-amber:       #FACC15;   /* caption highlight word    */
+
+  /* Shape */
+  --cs-radius-s:    5px;
+  --cs-radius-m:    8px;
+  --cs-radius-l:    12px;
+  --cs-radius-xl:   14px;
+  --cs-radius-pill: 999px;
+
+  /* Type */
+  --cs-font:        system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --cs-mono:        ui-monospace, SFMono-Regular, Menlo, monospace;
+  --cs-micro:       10px;      /* uppercase section labels  */
+  --cs-label:       11.5px;    /* control labels            */
+  --cs-body:        12px;       /* default UI text           */
+  --cs-title:       13px;
+
+  /* Layout (match these to your shell) */
+  --cs-topbar-h:    50px;
+  --cs-rail-w:      66px;
+  --cs-panel-w:     296px;
+  --cs-inspector-w: 296px;
+  --cs-timeline-h:  256px;
+  --cs-trackhead-w: 172px;
+}
+
+/* --------------------------------------------------------------------------
+   2. BASE
+   -------------------------------------------------------------------------- */
+.cs-app {
+  font-family: var(--cs-font);
+  font-size: var(--cs-body);
+  line-height: 1.45;
+  color: var(--cs-text);
+  background: var(--cs-bg-0);
+  border-radius: var(--cs-radius-l);
+  overflow: hidden;
+  min-width: 1080px;            /* horizontal scroll below this */
+  position: relative;           /* anchor for modal / palette / toast */
+}
+.cs-app *, .cs-app *::before, .cs-app *::after { box-sizing: border-box; }
+.cs-app button { font-family: inherit; }
+.cs-app ::selection { background: var(--cs-accent-dim); }
+
+/* Utility */
+.cs-hidden { display: none !important; }
+.cs-muted  { color: var(--cs-muted); }
+.cs-row    { display: flex; align-items: center; gap: 8px; }
+.cs-spacer { flex: 1; }
+
+/* Uppercase micro section label */
+.cs-section-label {
+  font-size: var(--cs-micro);
+  font-weight: 700;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  color: var(--cs-muted);
+  margin: 2px 0 10px;
+}
+
+/* --------------------------------------------------------------------------
+   3. TOP BAR  (.cs-topbar)
+   -------------------------------------------------------------------------- */
+.cs-topbar {
+  height: var(--cs-topbar-h);
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 12px;
+  background: var(--cs-bg-1);
+  border-bottom: 1px solid var(--cs-border);
+}
+.cs-logo {
+  width: 28px; height: 28px; border-radius: 7px;
+  background: var(--cs-accent);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 12px; color: #fff;
+}
+.cs-brand { font-weight: 700; font-size: 13.5px; }
+.cs-vdiv  { width: 1px; height: 20px; background: var(--cs-border-2); }
+
+.cs-project-btn {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600; color: var(--cs-text);
+  background: transparent; border: 1px solid transparent;
+  border-radius: 7px; padding: 6px 9px; cursor: pointer;
+}
+.cs-project-btn:hover { background: var(--cs-card); }
+
+.cs-icon-btn {
+  width: 30px; height: 30px; border-radius: 7px; border: 0;
+  background: transparent; color: var(--cs-muted);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.cs-icon-btn:hover { background: var(--cs-card); color: var(--cs-text); }
+
+.cs-saved { font-size: 11px; color: var(--cs-muted); display: flex; align-items: center; gap: 6px; }
+.cs-saved i { width: 7px; height: 7px; border-radius: 50%; background: var(--cs-green); font-style: normal; }
+
+/* Primary action — flat, confident, no gradient */
+.cs-btn-primary {
+  border: 0; cursor: pointer; font-weight: 700; font-size: 12.5px;
+  color: #fff; padding: 8px 22px; border-radius: var(--cs-radius-m);
+  background: var(--cs-accent);
+}
+.cs-btn-primary:hover { background: var(--cs-accent-2); }
+
+.cs-concept-tag {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 1.2px;
+  color: var(--cs-accent-2);
+  border: 1px solid rgba(46, 124, 246, .4);
+  padding: 4px 10px; border-radius: var(--cs-radius-pill);
+}
+.cs-avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: #3A3A3A; border: 1px solid var(--cs-border-2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: var(--cs-muted);
+}
+
+/* --------------------------------------------------------------------------
+   4. WORKSPACE SHELL + ICON RAIL
+   -------------------------------------------------------------------------- */
+.cs-workspace { display: flex; height: 480px; background: var(--cs-bg-0); }
+
+.cs-rail {
+  width: var(--cs-rail-w); flex: none;
+  background: var(--cs-bg-1);
+  border-right: 1px solid var(--cs-border);
+  display: flex; flex-direction: column; align-items: center;
+  padding: 10px 0; gap: 2px;
+}
+.cs-rail-btn {
+  width: 56px; border: 0; background: transparent; color: var(--cs-muted);
+  border-radius: 9px; padding: 8px 0 6px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  font-size: 9.5px; font-weight: 600;
+}
+.cs-rail-btn:hover { color: var(--cs-text); background: var(--cs-card); }
+.cs-rail-btn.is-active { color: #fff; background: var(--cs-card-2); }
+.cs-rail-btn.is-active svg { color: var(--cs-accent-2); }
+.cs-rail-btn.is-ai svg { color: var(--cs-accent-2); }   /* AI Lab always glows blue */
+
+/* --------------------------------------------------------------------------
+   5. SIDE PANEL
+   -------------------------------------------------------------------------- */
+.cs-panel {
+  width: var(--cs-panel-w); flex: none;
+  background: var(--cs-bg-1);
+  border-right: 1px solid var(--cs-border);
+  display: flex; flex-direction: column;
+}
+.cs-panel-head {
+  padding: 13px 14px 10px;
+  border-bottom: 1px solid var(--cs-border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.cs-panel-head h3 { font-size: 12.5px; font-weight: 700; }
+.cs-panel-body { padding: 12px; overflow-y: auto; flex: 1; }
+
+/* --- Media tab --- */
+.cs-import-zone {
+  border: 1px dashed var(--cs-border-2);
+  border-radius: 9px; background: var(--cs-card);
+  padding: 22px 12px; text-align: center; cursor: pointer;
+  margin-bottom: 14px;
+}
+.cs-import-zone:hover { border-color: var(--cs-accent); }
+.cs-import-zone p { font-size: 12px; font-weight: 700; }
+.cs-import-zone small { color: var(--cs-muted); font-size: 10.5px; }
+
+.cs-media-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cs-media-card { cursor: pointer; }
+.cs-media-thumb {
+  aspect-ratio: 16 / 9; border-radius: 7px;
+  border: 1px solid var(--cs-border);
+  position: relative; overflow: hidden;
+  background: #222; /* replaced by real thumbnail in app */
+}
+.cs-media-thumb .cs-duration {
+  position: absolute; right: 5px; bottom: 5px;
+  font-size: 9.5px; font-weight: 700;
+  background: rgba(0, 0, 0, .75); color: #fff;
+  padding: 2px 6px; border-radius: 4px;
+}
+.cs-media-card p {
+  font-size: 10.5px; color: var(--cs-muted); margin-top: 5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* --- Text templates tab --- */
+.cs-template-row {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--cs-card); border: 1px solid var(--cs-border);
+  border-radius: 9px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer;
+}
+.cs-template-row:hover { border-color: var(--cs-accent); }
+.cs-template-row .cs-aa { font-size: 19px; font-weight: 800; width: 44px; flex: none; }
+.cs-template-row b { font-size: 12px; display: block; }
+.cs-template-row small { color: var(--cs-muted); font-size: 10.5px; }
+
+/* --- Audio tab --- */
+.cs-audio-row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--cs-card); border: 1px solid var(--cs-border);
+  border-radius: 9px; padding: 9px 10px; margin-bottom: 8px;
+}
+.cs-miniwave { display: flex; align-items: center; gap: 1.5px; height: 26px; flex: 1; }
+.cs-miniwave i { flex: 1; background: #6B6B6B; border-radius: 1px; min-width: 2px; }
+.cs-audio-row b { font-size: 11px; display: block; max-width: 110px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cs-audio-row small { color: var(--cs-muted); font-size: 10px; }
+.cs-add-btn {
+  width: 26px; height: 26px; flex: none; border-radius: 50%;
+  border: 1px solid var(--cs-border-2); background: transparent;
+  color: var(--cs-text); font-size: 15px; cursor: pointer; line-height: 1;
+}
+.cs-add-btn:hover { background: var(--cs-accent); border-color: var(--cs-accent); }
+
+/* --- Effects / Transitions tabs --- */
+.cs-fx-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.cs-fx-card { cursor: pointer; }
+.cs-fx-thumb { aspect-ratio: 1; border-radius: var(--cs-radius-m); border: 1px solid var(--cs-border); background: #222; }
+.cs-fx-card p { font-size: 10px; color: var(--cs-muted); margin-top: 5px; text-align: center; }
+
+/* --- AI Lab tab --- */
+.cs-score { display: flex; align-items: center; gap: 14px; }
+.cs-score .cs-big { font-size: 11px; color: var(--cs-muted); }
+.cs-score .cs-big b { font-size: 22px; color: #fff; }
+.cs-issue {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 0; border-top: 1px solid var(--cs-border);
+}
+.cs-issue:first-of-type { border-top: 0; }
+.cs-issue b { font-size: 11.5px; display: block; }
+.cs-issue small { color: var(--cs-muted); font-size: 10.5px; }
+.cs-fix-btn {
+  margin-left: auto; flex: none;
+  background: var(--cs-accent); color: #fff; border: 0;
+  border-radius: 7px; padding: 7px 15px;
+  font-weight: 700; font-size: 11.5px; cursor: pointer;
+}
+.cs-fix-btn:hover { background: var(--cs-accent-2); }
+.cs-fix-btn.is-done { background: #1F3A2A; color: var(--cs-green); cursor: default; }
+
+/* --------------------------------------------------------------------------
+   6. STAGE — preview + transport
+   -------------------------------------------------------------------------- */
+.cs-stage { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--cs-stage); }
+
+.cs-preview {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  position: relative; padding: 16px; min-height: 0;
+}
+/* 9:16 canvas. In the app, render the actual video frame here. */
+.cs-canvas-916 {
+  height: 100%; max-height: 400px; aspect-ratio: 9 / 16;
+  background: #000; border: 1px solid var(--cs-border-2);
+  border-radius: 6px; position: relative; overflow: hidden;
+}
+.cs-preview-tag, .cs-aspect-tag {
+  position: absolute; top: 10px; z-index: 3;
+  font-size: 9.5px; font-weight: 800; letter-spacing: 1px;
+  background: rgba(0, 0, 0, .6); border: 1px solid var(--cs-border-2);
+  padding: 3px 9px; border-radius: var(--cs-radius-s); color: var(--cs-muted);
+}
+.cs-preview-tag { left: 10px; }
+.cs-aspect-tag  { right: 10px; }
+
+/* Caption overlay drawn on the canvas (Hormozi style) */
+.cs-caption-line { position: absolute; left: 0; right: 0; top: 38%; text-align: center; padding: 0 14px; z-index: 2; }
+.cs-caption-line .cs-w {
+  display: inline-block; font-weight: 900; font-size: 21px; letter-spacing: -.3px;
+  color: #fff; text-shadow: 0 2px 0 #000, 0 0 14px rgba(0, 0, 0, .8);
+  margin: 0 3px;
+}
+.cs-caption-line .cs-w.cs-hl { color: var(--cs-amber); }
+
+.cs-transport {
+  height: 62px; flex: none;
+  border-top: 1px solid var(--cs-border);
+  background: var(--cs-bg-1);
+  display: flex; align-items: center; gap: 8px; padding: 0 14px;
+}
+.cs-timecode {
+  font-family: var(--cs-mono); font-size: 13px; font-weight: 600;
+  color: var(--cs-text); font-variant-numeric: tabular-nums; min-width: 118px;
+}
+.cs-timecode span { color: var(--cs-muted); }
+.cs-transport-btn {
+  width: 32px; height: 32px; border-radius: 7px; border: 0;
+  background: transparent; color: #CFCFCF;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.cs-transport-btn:hover { background: var(--cs-card); color: #fff; }
+.cs-play-btn {
+  width: 38px; height: 38px; border-radius: 50%; border: 0; cursor: pointer;
+  background: var(--cs-accent); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.cs-play-btn:hover { background: var(--cs-accent-2); }
+.cs-quality {
+  font-size: 11.5px; font-weight: 700; color: var(--cs-muted);
+  border: 1px solid var(--cs-border-2); background: var(--cs-card);
+  border-radius: 7px; padding: 6px 10px; cursor: pointer;
+}
+
+/* --------------------------------------------------------------------------
+   7. INSPECTOR (right panel)
+   -------------------------------------------------------------------------- */
+.cs-inspector {
+  width: var(--cs-inspector-w); flex: none;
+  background: var(--cs-bg-1);
+  border-left: 1px solid var(--cs-border);
+  display: flex; flex-direction: column;
+}
+.cs-tabs { display: flex; padding: 10px 12px 0; border-bottom: 1px solid var(--cs-border); gap: 2px; }
+.cs-tabs button {
+  border: 0; background: transparent; color: var(--cs-muted);
+  font-size: 12px; font-weight: 700; padding: 9px 11px; cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.cs-tabs button.is-active { color: #fff; border-bottom-color: var(--cs-accent); }
+.cs-inspector-body { padding: 13px 12px; overflow-y: auto; flex: 1; }
+
+.cs-prop-card {
+  background: var(--cs-card); border: 1px solid var(--cs-border);
+  border-radius: 9px; padding: 13px; margin-bottom: 12px;
+}
+.cs-prop-card h4 {
+  font-size: 12px; font-weight: 700; margin-bottom: 10px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.cs-pill {
+  font-size: 10px; font-weight: 800; color: var(--cs-accent-2);
+  background: var(--cs-accent-dim); padding: 2px 9px; border-radius: var(--cs-radius-pill);
+}
+
+/* Form controls */
+.cs-field-label {
+  font-size: var(--cs-micro); font-weight: 700; letter-spacing: 1px;
+  color: var(--cs-muted); text-transform: uppercase; margin: 10px 0 6px;
+}
+.cs-select {
+  width: 100%; appearance: none;
+  background-color: var(--cs-inset); border: 1px solid var(--cs-border-2);
+  color: var(--cs-text); font-size: 12px; font-weight: 600;
+  border-radius: 7px; padding: 8px 10px; cursor: pointer;
+}
+.cs-select:focus { outline: none; border-color: var(--cs-accent); }
+
+.cs-field-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.cs-field-row .cs-name { font-size: var(--cs-label); color: var(--cs-muted); width: 52px; flex: none; }
+.cs-field-row .cs-val {
+  font-size: 11px; font-weight: 700; min-width: 44px; text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.cs-slider { flex: 1; appearance: none; height: 4px; border-radius: 99px; background: #333; cursor: pointer; }
+.cs-slider::-webkit-slider-thumb {
+  appearance: none; width: 13px; height: 13px; border-radius: 50%;
+  background: #fff; border: none; box-shadow: 0 1px 5px rgba(0, 0, 0, .6); cursor: pointer;
+}
+.cs-slider::-moz-range-thumb {
+  width: 13px; height: 13px; border-radius: 50%;
+  background: #fff; border: none; cursor: pointer;
+}
+
+.cs-segmented { display: flex; background: var(--cs-inset); border: 1px solid var(--cs-border); border-radius: var(--cs-radius-m); padding: 3px; gap: 2px; }
+.cs-segmented button {
+  flex: 1; border: 0; background: transparent; color: var(--cs-muted);
+  font-size: 11px; font-weight: 700; padding: 6px 4px; border-radius: var(--cs-radius-s); cursor: pointer;
+}
+.cs-segmented button.is-active { background: #2C2C2C; color: #fff; }
+
+.cs-swatches { display: flex; gap: 8px; }
+.cs-swatch {
+  flex: 1; display: flex; align-items: center; gap: 8px;
+  background: var(--cs-inset); border: 1px solid var(--cs-border-2);
+  border-radius: 7px; padding: 7px 9px; cursor: pointer;
+}
+.cs-swatch:hover { border-color: var(--cs-accent); }
+.cs-swatch-box { width: 24px; height: 24px; border-radius: 6px; flex: none; }
+.cs-swatch code { font-size: 10.5px; color: var(--cs-muted); font-family: var(--cs-mono); }
+
+.cs-toggle-row { display: flex; align-items: center; margin-top: 10px; }
+.cs-toggle-row span { font-size: 11.5px; font-weight: 600; }
+.cs-toggle {
+  margin-left: auto; width: 34px; height: 19px; border-radius: 99px;
+  background: var(--cs-accent); position: relative; cursor: pointer; flex: none;
+  border: 0;
+}
+.cs-toggle::after {
+  content: ""; position: absolute; right: 3px; top: 3px;
+  width: 13px; height: 13px; border-radius: 50%; background: #fff;
+}
+.cs-toggle.is-off { background: #3A3A3A; }
+.cs-toggle.is-off::after { right: 18px; }
+
+.cs-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cs-chip {
+  font-size: 11px; font-weight: 600;
+  border: 1px solid var(--cs-border-2); border-radius: 7px;
+  padding: 6px 12px; background: var(--cs-inset); color: var(--cs-muted);
+  cursor: pointer;
+}
+.cs-chip.is-active { border-color: var(--cs-accent); color: #fff; background: var(--cs-accent-dim); }
+
+/* --------------------------------------------------------------------------
+   8. TIMELINE
+   -------------------------------------------------------------------------- */
+.cs-timeline {
+  height: var(--cs-timeline-h);
+  border-top: 1px solid var(--cs-border);
+  background: var(--cs-bg-1);
+  display: flex; flex-direction: column;
+}
+.cs-tl-toolbar {
+  height: 42px; display: flex; align-items: center; gap: 4px;
+  padding: 0 10px; border-bottom: 1px solid var(--cs-border);
+}
+.cs-tool {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 11.5px; font-weight: 600; color: var(--cs-muted);
+  border: 0; background: transparent; border-radius: 7px;
+  padding: 7px 10px; cursor: pointer;
+}
+.cs-tool:hover { background: var(--cs-card); color: #fff; }
+.cs-tool.is-active { color: var(--cs-accent-2); background: var(--cs-accent-dim); }
+.cs-tool kbd {
+  font-size: 9.5px; background: #0C0C0C; border: 1px solid var(--cs-border-2);
+  border-radius: 4px; padding: 1px 5px; color: var(--cs-muted); font-family: inherit;
+}
+.cs-tsep { width: 1px; height: 20px; background: var(--cs-border-2); margin: 0 6px; }
+.cs-zoom { display: flex; align-items: center; gap: 6px; color: var(--cs-muted); }
+.cs-zoom .cs-slider { width: 90px; }
+
+.cs-tl-body { flex: 1; display: flex; min-height: 0; }
+.cs-trackheads {
+  width: var(--cs-trackhead-w); flex: none;
+  border-right: 1px solid var(--cs-border); background: var(--cs-bg-2);
+}
+.cs-track-corner {
+  height: 26px; font-size: 9.5px; font-weight: 700; letter-spacing: 1.2px;
+  color: var(--cs-muted); display: flex; align-items: center;
+  padding: 0 12px; border-bottom: 1px solid var(--cs-border);
+}
+.cs-trackhead {
+  border-bottom: 1px solid var(--cs-border);
+  display: flex; align-items: center; gap: 8px; padding: 0 10px;
+}
+.cs-trackhead .cs-tn { font-size: 11px; font-weight: 700; color: var(--cs-muted); width: 24px; }
+.cs-trackhead .cs-tlabel { font-size: 11px; }
+.cs-trackhead .cs-hbtn {
+  width: 24px; height: 24px; border: 0; background: transparent; color: var(--cs-faint);
+  display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: var(--cs-radius-s);
+}
+.cs-trackhead .cs-hbtn:hover { color: #fff; background: var(--cs-card); }
+
+.cs-lanes { flex: 1; position: relative; overflow: hidden; }
+.cs-ruler { height: 26px; position: relative; border-bottom: 1px solid var(--cs-border); background: var(--cs-inset); }
+.cs-tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid rgba(255, 255, 255, .12); }
+.cs-tick.is-major { border-left-color: rgba(255, 255, 255, .25); }
+.cs-tick span {
+  position: absolute; left: 4px; top: 5px; font-size: 9px;
+  color: var(--cs-muted); font-variant-numeric: tabular-nums;
+}
+.cs-lane { position: relative; border-bottom: 1px solid var(--cs-border); background: var(--cs-lane); }
+
+/* Video clip with filmstrip thumbnails */
+.cs-clip {
+  position: absolute; top: 5px; bottom: 5px;
+  border-radius: var(--cs-radius-s); overflow: hidden; display: flex;
+  border: 1px solid rgba(255, 255, 255, .14);
+  background: #1A1A1A;
+}
+.cs-clip .cs-frame { flex: 1; border-right: 1px solid rgba(0, 0, 0, .45); }
+.cs-clip .cs-frame:last-child { border-right: 0; }
+.cs-clip .cs-clip-label {
+  position: absolute; left: 7px; top: 5px; z-index: 2;
+  font-size: 10px; font-weight: 600; color: rgba(255, 255, 255, .92);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .8); white-space: nowrap;
+}
+.cs-clip.is-selected { border-color: var(--cs-accent); }
+
+/* Caption clip — word-level karaoke spans inside .cs-clip-label */
+.cs-clip.is-caption { align-items: center; background: rgba(46, 124, 246, .2); border-color: rgba(46, 124, 246, .55); }
+.cs-clip.is-caption .cs-clip-label { position: static; padding: 0 9px; color: #BCD6FF; text-shadow: none; }
+.cs-clip.is-caption .cs-w { padding: 1px 3px; border-radius: 3px; transition: background .15s; }
+.cs-clip.is-caption .cs-w.is-on { background: rgba(46, 124, 246, .6); color: #fff; }
+
+/* Audio waveform clip */
+.cs-waveform {
+  position: absolute; top: 5px; bottom: 5px;
+  border-radius: var(--cs-radius-s);
+  background: #14251C; border: 1px solid rgba(52, 211, 153, .35);
+  display: flex; align-items: center; gap: 2px; padding: 0 8px; overflow: hidden;
+}
+.cs-waveform i { flex: 1; min-width: 2px; background: var(--cs-green); border-radius: 2px; opacity: .8; }
+
+/* Silence region overlay on the waveform (dead air detected by AI) */
+.cs-silence {
+  position: absolute; top: 0; bottom: 0; z-index: 2;
+  background: repeating-linear-gradient(45deg,
+    rgba(244, 63, 94, .4), rgba(244, 63, 94, .4) 6px,
+    rgba(244, 63, 94, .14) 6px, rgba(244, 63, 94, .14) 12px);
+  border-left: 1px solid rgba(244, 63, 94, .8);
+  border-right: 1px solid rgba(244, 63, 94, .8);
+  transition: opacity .6s;
+}
+.cs-silence.is-removed { opacity: 0; }
+
+/* Playhead */
+.cs-playhead {
+  position: absolute; top: 0; bottom: 0; width: 1px; z-index: 5;
+  background: #fff; box-shadow: 0 0 6px rgba(255, 255, 255, .5);
+  pointer-events: none;
+}
+.cs-playhead::before {
+  content: ""; position: absolute; top: 0; left: -5px;
+  border: 5px solid transparent; border-top: 7px solid #fff;
+}
+
+/* --------------------------------------------------------------------------
+   9. OVERLAYS — export modal, command palette, toast
+   -------------------------------------------------------------------------- */
+.cs-modal-backdrop {
+  position: absolute; inset: 0; z-index: 50;
+  background: rgba(0, 0, 0, .62);
+  display: flex; align-items: center; justify-content: center;
+}
+.cs-modal {
+  width: 390px; background: var(--cs-bg-1);
+  border: 1px solid var(--cs-border-2); border-radius: var(--cs-radius-xl);
+  padding: 22px; position: relative;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .6);
+}
+.cs-modal h3 { font-size: 15px; font-weight: 800; margin-bottom: 4px; }
+.cs-modal-close {
+  position: absolute; top: 12px; right: 12px;
+  width: 28px; height: 28px; border-radius: 7px; border: 0;
+  background: transparent; color: var(--cs-muted); font-size: 15px; cursor: pointer;
+}
+.cs-modal-close:hover { background: var(--cs-card); color: #fff; }
+.cs-btn-block {
+  width: 100%; border: 0; cursor: pointer; font-weight: 700; font-size: 12.5px;
+  color: #fff; padding: 11px; border-radius: 9px;
+  background: var(--cs-accent);
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.cs-btn-block:hover { background: var(--cs-accent-2); }
+.cs-btn-ghost {
+  flex: 1; border: 1px solid var(--cs-border-2); background: var(--cs-inset);
+  color: var(--cs-text); font-size: 11.5px; font-weight: 700;
+  padding: 9px; border-radius: var(--cs-radius-m); cursor: pointer;
+}
+.cs-btn-ghost:hover { border-color: var(--cs-accent); color: var(--cs-accent-2); }
+
+.cs-progress { height: 8px; background: #262626; border-radius: 99px; overflow: hidden; margin: 16px 0 8px; }
+.cs-progress > div { height: 100%; width: 0; background: var(--cs-accent); border-radius: 99px; transition: width .15s; }
+.cs-meta-row { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 11px; color: var(--cs-muted); }
+.cs-success-badge {
+  width: 52px; height: 52px; border-radius: 50%;
+  background: rgba(52, 211, 153, .13); border: 1px solid var(--cs-green);
+  display: flex; align-items: center; justify-content: center;
+  margin: 4px auto 10px; color: var(--cs-green);
+}
+
+/* Command palette */
+.cs-palette-backdrop {
+  position: absolute; inset: 0; z-index: 60;
+  display: flex; justify-content: center; padding-top: 80px;
+  background: rgba(0, 0, 0, .45);
+}
+.cs-palette {
+  width: 460px; height: fit-content; max-height: 340px;
+  background: #1B1B1B; border: 1px solid var(--cs-border-2);
+  border-radius: var(--cs-radius-l); overflow: hidden;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .65);
+}
+.cs-palette input {
+  width: 100%; background: transparent; border: 0;
+  border-bottom: 1px solid var(--cs-border);
+  color: #fff; padding: 14px 16px; font-size: 13px; outline: none;
+}
+.cs-palette-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 16px; cursor: pointer;
+  font-size: 12.5px; font-weight: 600; color: var(--cs-text);
+}
+.cs-palette-item:hover { background: var(--cs-accent-dim); }
+.cs-palette-item kbd {
+  margin-left: auto; font-size: 10px;
+  background: #0C0C0C; border: 1px solid var(--cs-border-2);
+  border-radius: 4px; padding: 2px 7px; color: var(--cs-muted); font-family: inherit;
+}
+.cs-palette-empty { padding: 16px; text-align: center; color: var(--cs-muted); font-size: 12px; }
+
+/* Toast */
+.cs-toast {
+  position: absolute; bottom: 276px; left: 50%; transform: translateX(-50%);
+  background: #242424; border: 1px solid var(--cs-border-2);
+  color: #fff; font-size: 12px; font-weight: 600;
+  padding: 10px 20px; border-radius: var(--cs-radius-pill); z-index: 70;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, .55); white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   10. SCROLLBARS + REDUCED MOTION
+   -------------------------------------------------------------------------- */
+.cs-app ::-webkit-scrollbar { width: 10px; height: 10px; }
+.cs-app ::-webkit-scrollbar-thumb { background: #2E2E2E; border-radius: 99px; border: 2px solid var(--cs-bg-1); }
+.cs-app ::-webkit-scrollbar-track { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-app *, .cs-app *::before, .cs-app *::after {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+  }
+}
+

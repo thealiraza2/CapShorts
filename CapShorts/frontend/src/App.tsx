@@ -1,12 +1,7 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect } from 'react';
 import { apiUrl } from './config';
 import { Sparkles, X } from 'lucide-react';
-import { CapCutHeader } from './components/capcut/CapCutHeader';
-import { MediaLibraryPanel } from './components/capcut/MediaLibraryPanel';
-import { CanvasPreview } from './components/capcut/CanvasPreview';
-import { PropertiesInspector } from './components/capcut/PropertiesInspector';
-import { CapCutTimeline } from './components/capcut/CapCutTimeline';
-import { ExportModal } from './components/ExportModal';
+import { CapShortsStudio } from './components/capcut/CapShortsStudio';
 import { SettingsModal } from './components/SettingsModal';
 import { useShallow } from 'zustand/react/shallow';
 import { useVideoStore } from './store/useVideoStore';
@@ -18,14 +13,6 @@ export const App: React.FC = () => {
     transcribingStep,
     transcribeProgress,
     cancelTranscription,
-    isPlaying,
-    setIsPlaying,
-    splitAtPlayhead,
-    deleteSelectedTimelineItem,
-    isSnapEnabled,
-    setIsSnapEnabled,
-    isBladeActive,
-    setIsBladeActive
   } = useVideoStore(
     useShallow((state) => ({
       setEngineHealth: state.setEngineHealth,
@@ -33,18 +20,10 @@ export const App: React.FC = () => {
       transcribingStep: state.transcribingStep,
       transcribeProgress: state.transcribeProgress,
       cancelTranscription: state.cancelTranscription,
-      isPlaying: state.isPlaying,
-      setIsPlaying: state.setIsPlaying,
-      splitAtPlayhead: state.splitAtPlayhead,
-      deleteSelectedTimelineItem: state.deleteSelectedTimelineItem,
-      isSnapEnabled: state.isSnapEnabled,
-      setIsSnapEnabled: state.setIsSnapEnabled,
-      isBladeActive: state.isBladeActive,
-      setIsBladeActive: state.setIsBladeActive,
     }))
   );
 
-  // Poll Local AI Engine status
+  // Silent Local AI Engine loopback check in background (No UI dot or text)
   useEffect(() => {
     let isMounted = true;
     const checkHealth = async () => {
@@ -107,67 +86,15 @@ export const App: React.FC = () => {
     };
   }, [setEngineHealth]);
 
-  // Global Keyboard Shortcuts (Space: Play/Pause, Ctrl+B: Split, Del: Delete, N: Snap)
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    // If typing inside an input, textarea, select, button, or contentEditable, don't trigger shortcuts
-    const target = e.target as HTMLElement;
-    if (
-      target.tagName === 'INPUT' ||
-      target.tagName === 'TEXTAREA' ||
-      target.tagName === 'SELECT' ||
-      target.tagName === 'BUTTON' ||
-      target.isContentEditable
-    ) {
-      return;
-    }
-
-    if (e.code === 'Space') {
-      e.preventDefault();
-      setIsPlaying(!isPlaying);
-    } else if (e.code === 'Delete' || e.code === 'Backspace') {
-      deleteSelectedTimelineItem();
-    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
-      e.preventDefault();
-      splitAtPlayhead();
-    } else if (e.key.toLowerCase() === 'b' && !e.ctrlKey && !e.metaKey) {
-      setIsBladeActive(!isBladeActive);
-    } else if (e.key.toLowerCase() === 'v') {
-      setIsBladeActive(false);
-    } else if (e.key.toLowerCase() === 'n') {
-      setIsSnapEnabled(!isSnapEnabled);
-    }
-  }, [isPlaying, setIsPlaying, deleteSelectedTimelineItem, splitAtPlayhead, isBladeActive, setIsBladeActive, isSnapEnabled, setIsSnapEnabled]);
-
-  useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleKeyDown]);
-
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#09090b] text-zinc-100 overflow-hidden font-['Plus_Jakarta_Sans',Inter,-apple-system,BlinkMacSystemFont,sans-serif] select-none">
-      {/* 1. CapCut Studio Top Bar */}
-      <CapCutHeader />
+    <>
+      {/* 1:1 Pixel-Level CapShorts Studio Reference Implementation */}
+      <CapShortsStudio />
 
-      {/* 2. CapCut 3-Panel Upper Layout */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left: Media & Assets Library Panel */}
-        <MediaLibraryPanel />
-
-        {/* Center Stage: Video Canvas Monitor */}
-        <CanvasPreview />
-
-        {/* Right: Contextual Properties Inspector */}
-        <PropertiesInspector />
-      </div>
-
-      {/* 3. CapCut Multi-Track Timeline (Bottom Half) */}
-      <CapCutTimeline />
-
-      {/* Modals */}
-      <ExportModal />
+      {/* Settings Modal (API Keys & Engine Setup) */}
       <SettingsModal />
 
-      {/* macOS Frosted Glass Transcription Loading Card */}
+      {/* Modern Frosted Glass Transcription Loading Card */}
       {isTranscribing && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center animate-fade select-none">
           <div className="w-full max-w-md p-8 rounded-3xl bg-zinc-900/90 backdrop-blur-2xl border border-white/[0.12] shadow-2xl flex flex-col items-center relative overflow-hidden">
@@ -205,6 +132,7 @@ export const App: React.FC = () => {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 };
+
