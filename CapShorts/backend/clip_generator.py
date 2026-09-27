@@ -17,15 +17,150 @@ VIRAL_HOOK_TRIGGERS = {
     "strategy", "win", "power", "formula", "magic", "proof", "revealed", "shocking"
 }
 
-VIRAL_TITLE_TEMPLATES = [
-    "🔥 The Truth Nobody Tells You",
-    "⚠️ Stop Making This Huge Mistake",
-    "💡 The Secret Rule for Rapid Growth",
-    "🚀 10x Your Results With This Hack",
-    "🧠 The Mindset Shift That Changes Everything",
-    "💰 How Top Creators Win Every Single Time",
-    "⚡ The Fastest Way to Achieve Your Goal"
-]
+FILLER_LEAD_WORDS = {
+    "so", "and", "or", "but", "basically", "actually", "like", "you", "know",
+    "well", "okay", "alright", "in", "this", "video", "today", "we", "are",
+    "going", "to", "talk", "about", "let's", "lets", "look", "at", "i", "mean",
+    # Roman Urdu / Hindi
+    "aur", "toh", "tau", "to", "phir", "phr", "laikin", "lekin", "magar",
+    "aaj", "hum", "is", "iss", "video", "mein", "me", "baat", "karenge",
+    "dosto", "bhai", "dekho", "agar", "aap", "yani", "yaani", "sirf"
+}
+
+def generate_clip_title(clip_words: List[Any], index: int) -> str:
+    """
+    Generates an engaging, clickable viral title derived directly from the clip's actual spoken words.
+    Never falls back to static hardcoded dummy templates!
+    """
+    if not clip_words:
+        return f"🔥 Viral Short #{index + 1}"
+
+    # Extract clean words text
+    words_text = [get_w_word(w).strip() for w in clip_words if get_w_word(w).strip()]
+    if not words_text:
+        return f"🔥 Viral Short #{index + 1}"
+
+    # Try to extract the first complete sentence or first 4-8 impactful words
+    first_clause: List[str] = []
+    for w in words_text[:12]:
+        first_clause.append(w)
+        if any(p in w for p in [".", "?", "!", "।", "؟"]) or len(first_clause) >= 7:
+            break
+
+    # Strip leading conversational fillers if enough words remain
+    while first_clause and clean_word(first_clause[0]) in FILLER_LEAD_WORDS and len(first_clause) > 3:
+        first_clause.pop(0)
+
+    # If first clause became too short, take up to 6 words
+    if len(first_clause) < 3:
+        first_clause = words_text[:6]
+
+    raw_phrase = " ".join(first_clause).strip(".,!?:;\"'()[]{}—–-")
+
+    # Smart Title Casing
+    def title_case_token(token: str) -> str:
+        if token.isupper() and len(token) <= 4:
+            return token  # Keep acronyms like AI, GPU, USD, ROI
+        return token.capitalize()
+
+    formatted_phrase = " ".join(title_case_token(t) for t in raw_phrase.split())
+
+    # Limit length gracefully at a word boundary
+    if len(formatted_phrase) > 42:
+        words_split = formatted_phrase.split()
+        shortened = []
+        cur_len = 0
+        for w in words_split:
+            if cur_len + len(w) + 1 > 40 and len(shortened) >= 3:
+                break
+            shortened.append(w)
+            cur_len += len(w) + 1
+        formatted_phrase = " ".join(shortened)
+
+    # Pick dynamic contextual emoji
+    lower_phrase = formatted_phrase.lower()
+    if "?" in "".join(words_text[:10]) or any(q in lower_phrase for q in ["why", "how", "what", "kya", "kaise", "kyun"]):
+        emoji = "❓ " if index % 2 == 0 else "🤔 "
+        if not formatted_phrase.endswith("?"):
+            formatted_phrase += "?"
+    elif any(m in lower_phrase for m in ["mistake", "warning", "stop", "never", "wrong", "galti", "danger"]):
+        emoji = "⚠️ "
+        if not formatted_phrase.endswith("!"):
+            formatted_phrase += "!"
+    elif any(c.isdigit() for c in formatted_phrase) or any(m in lower_phrase for m in ["money", "dollar", "earn", "paisa", "paise", "rich", "crore", "lakh"]):
+        emoji = "💰 " if index % 2 == 0 else "📈 "
+    elif any(s in lower_phrase for s in ["secret", "hack", "trick", "formula", "truth", "hidden", "rule"]):
+        emoji = "💡 " if index % 2 == 0 else "🔑 "
+    else:
+        emojis = ["🔥 ", "⚡ ", "🚀 ", "🎯 ", "🎬 "]
+        emoji = emojis[index % len(emojis)]
+        if not formatted_phrase.endswith(('!', '?')):
+            formatted_phrase += "!"
+
+    return f"{emoji}{formatted_phrase}"
+
+def generate_ai_titles_with_groq(
+    clips: List[Dict[str, Any]],
+    api_keys: List[str]
+) -> List[Dict[str, Any]]:
+    """
+    Uses Groq LLM (Llama 3.1 8b Instant, ~200ms latency) to generate
+    video-specific viral short titles in the clip's native language.
+    """
+    valid_keys = [k.strip() for k in api_keys if k and len(k.strip()) > 10]
+    if not valid_keys or not clips:
+        return clips
+
+    clip_snippets = []
+    for idx, c in enumerate(clips):
+        words = c.get("words", [])
+        snippet = " ".join(get_w_word(w) for w in words[:45])
+        clip_snippets.append(f"Clip {idx+1}: \"{snippet}\"")
+
+    prompt = (
+        "You are an expert viral YouTube Shorts headline creator. "
+        "Create a short, punchy 3-6 word viral title with 1 relevant emoji at the start for each clip below. "
+        "Match the language of the clip text (English, Roman Urdu, Hindi, Urdu, etc.). Do not translate. "
+        "Return ONLY a valid JSON array of strings containing the titles in exact order, e.g. [\"🔥 Title 1\", \"💡 Title 2\"]. "
+        "No conversational preamble.\n\n" + "\n".join(clip_snippets)
+    )
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    import requests
+    import json
+
+    for key in valid_keys:
+        try:
+            headers = {
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json"
+            }
+            body = {
+                "model": "llama-3.1-8b-instant",
+                "messages": [
+                    {"role": "system", "content": "You output only valid JSON arrays of strings."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.5,
+                "max_tokens": 300
+            }
+            res = requests.post(url, headers=headers, json=body, timeout=5)
+            if res.ok:
+                content = res.json()["choices"][0]["message"]["content"].strip()
+                if "[" in content and "]" in content:
+                    json_str = content[content.find("["):content.rfind("]")+1]
+                    titles = json.loads(json_str)
+                    if isinstance(titles, list) and len(titles) == len(clips):
+                        for idx, t in enumerate(titles):
+                            if isinstance(t, str) and t.strip():
+                                clips[idx]["title"] = t.strip()
+                        print(f"[clip_generator] Successfully generated {len(clips)} AI viral titles via Groq!")
+                        return clips
+        except Exception as e:
+            print(f"[clip_generator] AI title generation error: {e}")
+            continue
+
+    return clips
 
 DANGLING_CONNECTORS = {
     # English conjunctions, prepositions, determiners, incomplete words
@@ -157,20 +292,6 @@ def score_hook(sentence_words: List[Any]) -> float:
 
     return min(100.0, score)
 
-def generate_clip_title(clip_words: List[Any], index: int) -> str:
-    """Generates an engaging, clickable viral title."""
-    first_words = clip_words[:12]
-    first_text = " ".join(get_w_word(w) for w in first_words).strip(".,!?:;\"'")
-
-    if 10 <= len(first_text) <= 50 and any(c.isalpha() for c in first_text):
-        clean = first_text.strip()
-        if not clean.endswith(('!', '?')):
-            clean += "!"
-        emoji = "🔥 " if index % 3 == 0 else ("💡 " if index % 3 == 1 else "⚡ ")
-        return f"{emoji}{clean}"
-
-    return VIRAL_TITLE_TEMPLATES[index % len(VIRAL_TITLE_TEMPLATES)]
-
 MAX_TRANSCRIPT_WORDS = 15000
 
 def detect_viral_clips(
@@ -178,7 +299,8 @@ def detect_viral_clips(
     total_duration: float,
     min_clip_duration: float = 25.0,
     max_clip_duration: float = 60.0,
-    target_clips_count: int = 5
+    target_clips_count: int = 5,
+    api_keys: Optional[List[str]] = None
 ) -> List[Dict[str, Any]]:
     """
     Scans word transcript with millisecond accuracy, detects natural sentence boundaries,
@@ -329,5 +451,8 @@ def detect_viral_clips(
             "transcript_snippet": snippet,
             "words": c_words
         })
+
+    if api_keys:
+        result_clips = generate_ai_titles_with_groq(result_clips, api_keys)
 
     return result_clips

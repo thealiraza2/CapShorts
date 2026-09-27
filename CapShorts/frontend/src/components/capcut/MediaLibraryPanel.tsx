@@ -10,7 +10,6 @@ import {
   Sparkles,
   Play,
   RotateCcw,
-  Languages,
   Check,
   Search,
   Sliders,
@@ -62,7 +61,6 @@ export const MediaLibraryPanel: React.FC = () => {
     clearTranscribeError,
     startTranscription,
     cancelTranscription,
-    convertTranscriptScript,
     clips,
     selectedClipId,
     selectClip,
@@ -102,7 +100,6 @@ export const MediaLibraryPanel: React.FC = () => {
       clearTranscribeError: state.clearTranscribeError,
       startTranscription: state.startTranscription,
       cancelTranscription: state.cancelTranscription,
-      convertTranscriptScript: state.convertTranscriptScript,
       clips: state.clips,
       selectedClipId: state.selectedClipId,
       selectClip: state.selectClip,
@@ -328,9 +325,9 @@ export const MediaLibraryPanel: React.FC = () => {
                   onChange={(e) => setSelectedModel(e.target.value)}
                   className="w-full bg-zinc-950/80 border border-white/[0.08] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 transition-colors cursor-pointer"
                 >
-                  <option value="whisper-large-v3-turbo">⚡ Ultra Fast Groq Turbo (~2-3s)</option>
-                  <option value="base">💻 Standard (Offline On-Device)</option>
-                  <option value="small">💻 High Accuracy (Offline On-Device)</option>
+                  <option value="whisper-large-v3-turbo">⚡ Ultra Fast Cloud Engine (~2-3s) [Recommended]</option>
+                  <option value="base">💻 Standard Offline Engine (On-Device)</option>
+                  <option value="small">💻 High Accuracy Offline Engine (On-Device)</option>
                 </select>
               </div>
 
@@ -384,31 +381,6 @@ export const MediaLibraryPanel: React.FC = () => {
                   <span className="text-[10px] text-red-200/80 leading-relaxed">{transcribeError}</span>
                 </div>
               )}
-            </div>
-
-            {/* Quick Transliteration / Script Converter */}
-            <div className="bg-zinc-900/70 border border-white/[0.08] rounded-2xl p-3.5 space-y-2.5 shadow-sm ring-1 ring-white/[0.04]">
-              <div className="flex items-center space-x-2 text-xs font-bold text-zinc-200">
-                <Languages className="w-4 h-4 text-indigo-400" />
-                <span>Quick Script Converter</span>
-              </div>
-              <p className="text-[10px] text-zinc-400 leading-relaxed">
-                Instantly convert Devanagari/Hindi transcript text into clean Roman Urdu or Urdu script:
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => convertTranscriptScript('roman_urdu')}
-                  className="px-3 py-1.5 rounded-xl bg-zinc-950/80 hover:bg-zinc-800 border border-white/[0.08] text-xs font-semibold text-indigo-300 hover:border-indigo-500/40 transition-all flex items-center justify-center space-x-1"
-                >
-                  <span>To Roman Urdu</span>
-                </button>
-                <button
-                  onClick={() => convertTranscriptScript('urdu')}
-                  className="px-3 py-1.5 rounded-xl bg-zinc-950/80 hover:bg-zinc-800 border border-white/[0.08] text-xs font-semibold text-zinc-300 hover:border-zinc-600 transition-all flex items-center justify-center space-x-1"
-                >
-                  <span>To Urdu Script</span>
-                </button>
-              </div>
             </div>
 
             {/* Current Transcript Stats */}

@@ -183,7 +183,7 @@ export const App: React.FC = () => {
               Transcribing Speech & Generating Captions
             </h3>
             <p className="text-xs text-indigo-300/90 mb-4 font-mono max-w-sm truncate bg-indigo-500/10 px-3 py-1 rounded-full border border-indigo-500/20">
-              {transcribingStep || "Processing audio with Groq Whisper AI..."}
+              {transcribingStep || "Processing audio with AI Neural Engine..."}
             </p>
 
             {/* Animated Progress Bar */}

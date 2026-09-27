@@ -122,23 +122,24 @@ const RulerTrack: React.FC<RulerTrackProps> = React.memo(({
   onMouseDown,
 }) => {
   const visibleStartSec = Math.max(0, Math.floor((scrollLeft - 100) / timelineZoom));
-  const visibleEndSec = Math.min(effectiveDuration + 5, Math.ceil((scrollLeft + containerWidth + 100) / timelineZoom));
+  const visibleEndSec = Math.ceil((scrollLeft + containerWidth + 100) / timelineZoom);
 
   const ticks = useMemo(() => {
-    const list: { sec: number; isMajor: boolean }[] = [];
+    const list: { sec: number; isMajor: boolean; inRange: boolean }[] = [];
     const step = timelineZoom > 100 ? 1 : timelineZoom > 50 ? 2 : 5;
     for (let t = visibleStartSec; t <= visibleEndSec; t += step) {
       list.push({
         sec: t,
         isMajor: t % (step * 2) === 0 || t === 0,
+        inRange: t <= effectiveDuration,
       });
     }
     return list;
-  }, [visibleStartSec, visibleEndSec, timelineZoom]);
+  }, [visibleStartSec, visibleEndSec, timelineZoom, effectiveDuration]);
 
   return (
     <div
-      className="h-6 border-b border-white/[0.08] bg-zinc-950/60 relative cursor-pointer overflow-hidden backdrop-blur-sm"
+      className="h-7 border-b border-white/[0.08] bg-zinc-950/70 relative cursor-pointer overflow-hidden backdrop-blur-sm"
       onMouseDown={onMouseDown}
     >
       {ticks.map((t) => (
@@ -147,9 +148,9 @@ const RulerTrack: React.FC<RulerTrackProps> = React.memo(({
           style={{ left: `${t.sec * timelineZoom}px` }}
           className="absolute top-0 bottom-0 flex flex-col justify-end pointer-events-none"
         >
-          <div className={`w-[1px] ${t.isMajor ? 'h-3 bg-zinc-400' : 'h-1.5 bg-zinc-700'}`} />
+          <div className={`w-[1px] ${t.isMajor ? (t.inRange ? 'h-3.5 bg-zinc-300' : 'h-3 bg-zinc-600') : (t.inRange ? 'h-2 bg-zinc-600' : 'h-1.5 bg-zinc-800')}`} />
           {t.isMajor && (
-            <span className="text-[9px] font-mono text-zinc-400 pl-1 -translate-y-2 select-none font-medium">
+            <span className={`text-[9px] font-mono pl-1 -translate-y-2 select-none font-medium ${t.inRange ? 'text-zinc-300' : 'text-zinc-600'}`}>
               {Math.floor(t.sec)}s
             </span>
           )}
@@ -288,8 +289,16 @@ const VirtualizedSubtitleTrack: React.FC<VirtualizedSubtitleTrackProps> = React.
     });
   }, [blocks, timelineZoom, visibleStartPx, visibleEndPx]);
 
+  if (blocks.length === 0) {
+    return (
+      <div className="h-[68px] border-b border-white/[0.06] relative flex items-center justify-center px-4 bg-zinc-950/20">
+        <span className="text-[11px] text-zinc-600 font-medium">Captions Track (Generate Captions to add word blocks)</span>
+      </div>
+    );
+  }
+
   return (
-    <div className="h-16 border-b border-white/[0.06] relative flex items-center px-1 bg-zinc-950/30 overflow-hidden">
+    <div className="h-[68px] border-b border-white/[0.06] relative flex items-center px-1 bg-zinc-950/20 overflow-hidden">
       {visibleBlocks.map((block) => {
         const isSelected = (selectedTimelineItemId === block.id || block.words.some(w => w.id === selectedTimelineItemId)) && selectedTimelineItemType === 'subtitle';
         return (
@@ -327,10 +336,16 @@ const VideoTrack: React.FC<VideoTrackProps> = React.memo(({
   isBladeActive,
   onSegmentClick,
 }) => {
-  if (!segments || segments.length === 0) return <div className="h-16 border-b border-white/[0.06] bg-zinc-950/50" />;
+  if (!segments || segments.length === 0) {
+    return (
+      <div className="h-[72px] border-b border-white/[0.06] relative flex items-center justify-center px-4 bg-zinc-950/30">
+        <span className="text-[11px] text-zinc-600 font-medium">Video Track (Import video to place media segments)</span>
+      </div>
+    );
+  }
 
   return (
-    <div className="h-16 border-b border-white/[0.06] relative flex items-center bg-zinc-950/50 overflow-hidden">
+    <div className="h-[72px] border-b border-white/[0.06] relative flex items-center bg-zinc-950/30 overflow-hidden">
       {segments.map((seg) => {
         const isSelected = selectedTimelineItemId === seg.id && selectedTimelineItemType === 'video';
         const leftPx = seg.start * timelineZoom;
@@ -383,13 +398,21 @@ interface AudioWaveformCanvasProps {
 }
 
 const AudioWaveformCanvas: React.FC<AudioWaveformCanvasProps> = React.memo(({ duration, timelineZoom }) => {
-  const width = Math.max(800, Math.round((duration || 10) * timelineZoom));
+  if (!duration || duration <= 0) {
+    return (
+      <div className="h-[60px] border-b border-white/[0.06] relative flex items-center justify-center px-4 bg-zinc-950/20">
+        <span className="text-[11px] text-zinc-600 font-medium">Audio Track (Waveform will appear when video is loaded)</span>
+      </div>
+    );
+  }
+
+  const width = Math.max(20, Math.round(duration * timelineZoom));
 
   return (
-    <div className="h-14 relative flex items-center px-1 bg-zinc-950/40 overflow-hidden">
+    <div className="h-[60px] relative flex items-center px-1 bg-zinc-950/20 overflow-hidden border-b border-white/[0.06]">
       <div
         style={{ width: `${width}px` }}
-        className="h-full relative flex items-center bg-emerald-950/20 border border-emerald-500/20 rounded-lg overflow-hidden pointer-events-none"
+        className="h-full relative flex items-center bg-emerald-950/20 border border-emerald-500/25 rounded-lg overflow-hidden pointer-events-none"
       >
         <div
           className="w-full h-8 opacity-85"
@@ -475,6 +498,7 @@ export const CapCutTimeline: React.FC = () => {
   const [track1Locked, setTrack1Locked] = useState(false);
   const [track2Locked, setTrack2Locked] = useState(false);
   const [track3Locked, setTrack3Locked] = useState(false);
+  const [isFullHeight, setIsFullHeight] = useState(false);
 
   // Viewport geometry state for virtualization (no forced clientWidth in loop)
   const [scrollLeft, setScrollLeft] = useState(0);
@@ -483,26 +507,26 @@ export const CapCutTimeline: React.FC = () => {
   const [bladeHoverTime, setBladeHoverTime] = useState<number | null>(null);
 
   const effectiveDuration = Math.max(duration || 10, transcript.length ? transcript[transcript.length - 1].end + 2 : 10);
-  const timelineWidth = Math.max(800, effectiveDuration * timelineZoom);
+  const timelineWidth = Math.max(containerWidth, effectiveDuration * timelineZoom);
 
   // Initialize and track container width on resize
   useEffect(() => {
-    if (scrollContainerRef.current) {
-      setContainerWidth(scrollContainerRef.current.clientWidth);
-    }
-    const handleResize = () => {
+    const updateWidth = () => {
       if (scrollContainerRef.current) {
         setContainerWidth(scrollContainerRef.current.clientWidth);
       }
     };
-    window.addEventListener('resize', handleResize);
+    updateWidth();
+    const t = setTimeout(updateWidth, 50);
+    window.addEventListener('resize', updateWidth);
     return () => {
-      window.removeEventListener('resize', handleResize);
+      clearTimeout(t);
+      window.removeEventListener('resize', updateWidth);
       if (scrollRafRef.current !== null) {
         cancelAnimationFrame(scrollRafRef.current);
       }
     };
-  }, []);
+  }, [isMinimized, isFullHeight]);
 
   // Throttled RAF scroll handler (Zero lag, drops duplicate frame scrolls)
   const handleContainerScroll = useCallback(() => {
@@ -645,14 +669,14 @@ export const CapCutTimeline: React.FC = () => {
   return (
     <div
       className={`${
-        isMinimized ? 'h-10' : 'h-[270px]'
-      } flex flex-col bg-[#0b0b0e] border-t border-white/[0.08] select-none text-zinc-200 flex-shrink-0 transition-all duration-200 ease-in-out overflow-hidden shadow-[0_-4px_20px_rgba(0,0,0,0.5)]`}
+        isMinimized ? 'h-11' : (isFullHeight ? 'h-[440px]' : 'h-[310px]')
+      } flex flex-col bg-[#0b0b0e] border-t border-white/[0.08] select-none text-zinc-200 flex-shrink-0 transition-all duration-200 ease-in-out overflow-hidden shadow-[0_-4px_25px_rgba(0,0,0,0.6)]`}
     >
       {/* Top Timeline Toolbar */}
       <div
-        onDoubleClick={() => setIsMinimized(!isMinimized)}
+        onDoubleClick={() => setIsFullHeight(!isFullHeight)}
         className="h-11 border-b border-white/[0.08] px-3.5 flex items-center justify-between bg-zinc-950/75 backdrop-blur-xl"
-        title="Double click to minimize/expand timeline"
+        title="Double click to toggle Full Timeline height"
       >
         {/* Left Toolbar Tools */}
         <div className="flex items-center space-x-2">
@@ -796,6 +820,22 @@ export const CapCutTimeline: React.FC = () => {
 
           <div className="h-4 w-[1px] bg-white/[0.08]" />
 
+          {/* Full Height / Standard Toggle Button */}
+          {!isMinimized && (
+            <button
+              onClick={() => setIsFullHeight(!isFullHeight)}
+              className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg transition-all text-xs font-semibold ${
+                isFullHeight
+                  ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-600/40'
+                  : 'text-zinc-400 hover:text-white hover:bg-white/[0.06]'
+              }`}
+              title={isFullHeight ? "Switch to Standard Timeline Height (310px)" : "Expand to Full Timeline Height (440px)"}
+            >
+              <Maximize2 className="w-3.5 h-3.5 text-indigo-400" />
+              <span>{isFullHeight ? 'Standard' : 'Full Timeline'}</span>
+            </button>
+          )}
+
           {/* Minimize / Expand Timeline Button */}
           <button
             onClick={() => setIsMinimized(!isMinimized)}
@@ -825,50 +865,53 @@ export const CapCutTimeline: React.FC = () => {
       {!isMinimized && (
         <div className="flex-1 flex overflow-hidden">
           {/* Left Track Headers Column */}
-          <div className="w-28 border-r border-white/[0.08] bg-[#0d0d10] flex flex-col flex-shrink-0 z-20 select-none">
+          <div className="w-32 border-r border-white/[0.08] bg-[#0c0c0f] flex flex-col flex-shrink-0 z-20 select-none shadow-md">
             {/* Ruler Corner Spacer */}
-            <div className="h-6 border-b border-white/[0.08] bg-zinc-950/60 flex items-center justify-between px-2.5 text-[10px] text-zinc-400 font-mono">
-              <span>TRACKS</span>
-              <span className="text-[9px] text-zinc-600">3</span>
+            <div className="h-7 border-b border-white/[0.08] bg-zinc-950/70 flex items-center justify-between px-3 text-[10px] text-zinc-400 font-mono">
+              <span className="font-semibold text-zinc-300">TRACKS</span>
+              <span className="text-[9px] bg-white/[0.06] px-1.5 py-0.5 rounded text-zinc-400">3</span>
             </div>
 
             {/* Track 1: Subtitle / Captions Track Header */}
-            <div className="h-16 border-b border-white/[0.06] px-2.5 flex items-center justify-between text-xs font-semibold bg-zinc-950/20">
-              <div className="flex items-center space-x-1.5 text-indigo-400">
+            <div className="h-[68px] border-b border-white/[0.06] px-3 flex items-center justify-between text-xs font-semibold bg-zinc-950/20">
+              <div className="flex items-center space-x-2 text-indigo-400">
                 <Type className="w-3.5 h-3.5" />
-                <span className="text-[11px] font-bold text-zinc-200">Captions</span>
+                <span className="text-xs font-bold text-zinc-200">Captions</span>
               </div>
               <button
                 onClick={() => setTrack1Locked(!track1Locked)}
                 className="text-zinc-500 hover:text-zinc-300 p-1 rounded hover:bg-white/[0.04] transition-colors"
+                title={track1Locked ? "Unlock track" : "Lock track"}
               >
                 {track1Locked ? <Lock className="w-3 h-3 text-amber-400" /> : <Unlock className="w-3 h-3" />}
               </button>
             </div>
 
             {/* Track 2: Video Track Header */}
-            <div className="h-16 border-b border-white/[0.06] px-2.5 flex items-center justify-between text-xs font-semibold bg-zinc-950/30">
-              <div className="flex items-center space-x-1.5 text-sky-400">
+            <div className="h-[72px] border-b border-white/[0.06] px-3 flex items-center justify-between text-xs font-semibold bg-zinc-950/30">
+              <div className="flex items-center space-x-2 text-sky-400">
                 <Video className="w-3.5 h-3.5" />
-                <span className="text-[11px] font-bold text-zinc-200">Video 1</span>
+                <span className="text-xs font-bold text-zinc-200">Video 1</span>
               </div>
               <button
                 onClick={() => setTrack2Locked(!track2Locked)}
                 className="text-zinc-500 hover:text-zinc-300 p-1 rounded hover:bg-white/[0.04] transition-colors"
+                title={track2Locked ? "Unlock track" : "Lock track"}
               >
                 {track2Locked ? <Lock className="w-3 h-3 text-amber-400" /> : <Unlock className="w-3 h-3" />}
               </button>
             </div>
 
             {/* Track 3: Audio Track Header */}
-            <div className="h-14 border-b border-white/[0.06] px-2.5 flex items-center justify-between text-xs font-semibold bg-zinc-950/20">
-              <div className="flex items-center space-x-1.5 text-emerald-400">
+            <div className="h-[60px] border-b border-white/[0.06] px-3 flex items-center justify-between text-xs font-semibold bg-zinc-950/20">
+              <div className="flex items-center space-x-2 text-emerald-400">
                 <Music className="w-3.5 h-3.5" />
-                <span className="text-[11px] font-bold text-zinc-200">Audio 1</span>
+                <span className="text-xs font-bold text-zinc-200">Audio 1</span>
               </div>
               <button
                 onClick={() => setTrack3Locked(!track3Locked)}
                 className="text-zinc-500 hover:text-zinc-300 p-1 rounded hover:bg-white/[0.04] transition-colors"
+                title={track3Locked ? "Unlock track" : "Lock track"}
               >
                 {track3Locked ? <Lock className="w-3 h-3 text-amber-400" /> : <Unlock className="w-3 h-3" />}
               </button>

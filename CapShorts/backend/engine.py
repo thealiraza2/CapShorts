@@ -44,7 +44,7 @@ from groq_transcribe import transcribe_with_groq_pool
 from transliterate import transliterate_transcript, transliterate_word
 from telemetry import telemetry
 
-app = FastAPI(title="CapShorts AI Engine", version="1.1.3")
+app = FastAPI(title="CapShorts AI Engine", version="1.1.8")
 
 def get_ffmpeg_bin() -> str:
     """Resolves platform-appropriate FFmpeg executable."""
@@ -537,7 +537,7 @@ def run_transcribe_job(
                 })
 
                 video_dur = dur if dur > 0 else (words_result[-1]["end"] if words_result else 60.0)
-                clips_result = detect_viral_clips(words_result, video_dur)
+                clips_result = detect_viral_clips(words_result, video_dur, api_keys=key_pool)
 
                 update_task_state(TRANSCRIBE_JOBS, task_id, {
                     "progress": 100,
@@ -662,7 +662,8 @@ def run_transcribe_job(
             })
 
             video_duration = words_result[-1]["end"] if words_result else (audio_duration or 60.0)
-            clips_result = detect_viral_clips(words_result, video_duration)
+            available_keys = key_pool if key_pool else get_master_groq_keys()
+            clips_result = detect_viral_clips(words_result, video_duration, api_keys=available_keys)
 
             update_task_state(TRANSCRIBE_JOBS, task_id, {
                 "progress": 100,
@@ -829,7 +830,8 @@ def generate_clips_endpoint(payload: GenerateClipsPayload):
         total_duration=payload.duration,
         min_clip_duration=payload.min_clip_duration if payload.min_clip_duration is not None else 25.0,
         max_clip_duration=payload.max_clip_duration if payload.max_clip_duration is not None else 60.0,
-        target_clips_count=payload.target_clips_count if payload.target_clips_count is not None else 5
+        target_clips_count=payload.target_clips_count if payload.target_clips_count is not None else 5,
+        api_keys=get_master_groq_keys()
     )
     return {"status": "success", "clips": clips}
 
@@ -1344,7 +1346,7 @@ def download_subtitles_file(filename: str):
     media_type = "application/x-subrip" if filename.endswith(".srt") else "text/vtt" if filename.endswith(".vtt") else "text/plain"
     return FileResponse(path, media_type=media_type, filename=os.path.basename(path))
 
-CURRENT_ENGINE_VERSION = "1.1.7"
+CURRENT_ENGINE_VERSION = "1.1.8"
 
 UPDATE_CACHE = {
     "last_checked": 0.0,
