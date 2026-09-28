@@ -275,12 +275,8 @@ export const CapShortsStudio: React.FC = () => {
   const [subStroke, setSubStroke] = useState(5);
 
   // AI Lab state with real calculations
-  const [aiScore, setAiScore] = useState(92);
-  const [aiIssues, setAiIssues] = useState([
-    { key: 'silence', title: '3 silent gaps · 4.2s', sub: 'Dead air detected on A1', fixed: false },
-    { key: 'hook', title: 'Weak hook · first 3s', sub: 'Retention drops 31% at start', fixed: false },
-    { key: 'audio', title: 'Audio dip at 0:12', sub: 'Dialogue 9dB under music', fixed: false },
-  ]);
+  const [aiScore, setAiScore] = useState<number | null>(null);
+  const [aiIssues, setAiIssues] = useState<Array<{ key: string; title: string; sub: string; fixed: boolean }>>([]);
   const [silencesRemoved, setSilencesRemoved] = useState(false);
 
   // Update AI score & issues based on real transcript when video is loaded
@@ -1445,16 +1441,24 @@ export const CapShortsStudio: React.FC = () => {
                         strokeWidth="9"
                         strokeLinecap="round"
                         strokeDasharray="213.6"
-                        strokeDashoffset={(213.6 * (1 - aiScore / 100)).toFixed(1)}
+                        strokeDashoffset={(213.6 * (1 - (aiScore || 0) / 100)).toFixed(1)}
                         transform="rotate(-90 42 42)"
                         style={{ transition: 'stroke-dashoffset 1.4s cubic-bezier(.2,.8,.2,1)' }}
                       />
-                      <text x="42" y="49" textAnchor="middle" fill="#F2F2F2" fontSize="21" fontWeight="800">
-                        {aiScore}
+                      <text x="42" y="49" textAnchor="middle" fill="#F2F2F2" fontSize={aiScore !== null ? '21' : '16'} fontWeight="800">
+                        {aiScore !== null ? aiScore : '--'}
                       </text>
                     </svg>
                     <div className="cs-big">
-                      <b>{aiScore}</b>/100<br />Viral score · top 8%<br />of shorts this week
+                      {aiScore !== null ? (
+                        <>
+                          <b>{aiScore}</b>/100<br />Viral score · top 8%<br />of shorts this week
+                        </>
+                      ) : (
+                        <>
+                          <b>Ready</b><br />Import video &amp; generate<br />captions to score
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="cs-field-label">Retention curve</div>
@@ -1481,22 +1485,28 @@ export const CapShortsStudio: React.FC = () => {
                   <h4>
                     Issues found <span className="cs-pill">{aiIssues.filter((i) => !i.fixed).length}</span>
                   </h4>
-                  {aiIssues.map((issue) => (
-                    <div key={issue.key} className="cs-issue">
-                      <div>
-                        <b>{issue.title}</b>
-                        <small>{issue.sub}</small>
+                  {aiIssues.length > 0 ? (
+                    aiIssues.map((issue) => (
+                      <div key={issue.key} className="cs-issue">
+                        <div>
+                          <b>{issue.title}</b>
+                          <small>{issue.sub}</small>
+                        </div>
+                        <button
+                          className={`cs-fix-btn${issue.fixed ? ' is-done' : ''}`}
+                          data-fix={issue.key}
+                          disabled={issue.fixed}
+                          onClick={() => handleFixIssue(issue.key)}
+                        >
+                          {issue.fixed ? 'Fixed' : 'Fix'}
+                        </button>
                       </div>
-                      <button
-                        className={`cs-fix-btn${issue.fixed ? ' is-done' : ''}`}
-                        data-fix={issue.key}
-                        disabled={issue.fixed}
-                        onClick={() => handleFixIssue(issue.key)}
-                      >
-                        {issue.fixed ? 'Fixed' : 'Fix'}
-                      </button>
-                    </div>
-                  ))}
+                    ))
+                  ) : (
+                    <p style={{ color: '#888', fontSize: 11, margin: '6px 0 0' }}>
+                      No issues detected yet. Generate auto captions to audit video retention.
+                    </p>
+                  )}
                 </div>
               </>
             )}
