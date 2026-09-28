@@ -192,6 +192,14 @@ export const CapShortsStudio: React.FC = () => {
     splitAtPlayhead,
     deleteSelectedTimelineItem,
     setIsSettingsModalOpen,
+    selectedLanguage,
+    setSelectedLanguage,
+    selectedModel,
+    setSelectedModel,
+    isTranscribing,
+    transcribeProgress,
+    transcribingStep,
+    cancelTranscription,
   } = useVideoStore(
     useShallow((s) => ({
       videoFile: s.videoFile,
@@ -223,6 +231,14 @@ export const CapShortsStudio: React.FC = () => {
       splitAtPlayhead: s.splitAtPlayhead,
       deleteSelectedTimelineItem: s.deleteSelectedTimelineItem,
       setIsSettingsModalOpen: s.setIsSettingsModalOpen,
+      selectedLanguage: s.selectedLanguage,
+      setSelectedLanguage: s.setSelectedLanguage,
+      selectedModel: s.selectedModel,
+      setSelectedModel: s.setSelectedModel,
+      isTranscribing: s.isTranscribing,
+      transcribeProgress: s.transcribeProgress,
+      transcribingStep: s.transcribingStep,
+      cancelTranscription: s.cancelTranscription,
     }))
   );
 
@@ -230,6 +246,21 @@ export const CapShortsStudio: React.FC = () => {
   const [activeRailTab, setActiveRailTab] = useState<'ai' | 'media' | 'text' | 'audio' | 'effects' | 'trans'>('media');
   const [activeInspTab, setActiveInspTab] = useState<'video' | 'audio' | 'text'>('video');
   const [selectedClip, setSelectedClip] = useState<{ trackId: string; clipId: string } | null>(null);
+
+  // Subtitle Presets state
+  const [selectedPresetCategory, setSelectedPresetCategory] = useState('All');
+  const [presetSearchQuery, setPresetSearchQuery] = useState('');
+  const allPresets = templatesData as SubtitlePreset[];
+  const filteredPresets = useMemo(() => {
+    return allPresets.filter((p) => {
+      const matchesCat = selectedPresetCategory === 'All' || p.category === selectedPresetCategory;
+      const matchesSearch =
+        p.name.toLowerCase().includes(presetSearchQuery.toLowerCase()) ||
+        p.fontFamily.toLowerCase().includes(presetSearchQuery.toLowerCase()) ||
+        p.category.toLowerCase().includes(presetSearchQuery.toLowerCase());
+      return matchesCat && matchesSearch;
+    });
+  }, [allPresets, selectedPresetCategory, presetSearchQuery]);
 
   // Playhead & Playback state (synced with video store or demo)
   const isRealVideo = Boolean(videoUrl && storeDuration > 0);
@@ -403,14 +434,73 @@ export const CapShortsStudio: React.FC = () => {
     [totalDuration, setCurrentTime, isRealVideo]
   );
 
+  // Smooth 60 FPS Draggable Scrubbing Handler
+  const isScrubbingRef = useRef(false);
+
+  const getTimeFromLanesEvent = useCallback(
+    (clientX: number) => {
+      if (!lanesRef.current) return 0;
+      const r = lanesRef.current.getBoundingClientRect();
+      const frac = clamp((clientX - r.left) / r.width, 0, 1);
+      return +(frac * totalDuration).toFixed(2);
+    },
+    [totalDuration]
+  );
+
+  const handleScrubStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsPlaying(false);
+      setLocalIsPlaying(false);
+      isScrubbingRef.current = true;
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+
+      const newSec = getTimeFromLanesEvent(e.clientX);
+      seekTo(newSec);
+
+      let scrubRaf: number | null = null;
+      let latestX = e.clientX;
+
+      const onMouseMove = (moveEvt: MouseEvent) => {
+        moveEvt.preventDefault();
+        latestX = moveEvt.clientX;
+        if (scrubRaf === null) {
+          scrubRaf = requestAnimationFrame(() => {
+            if (isScrubbingRef.current) {
+              const sec = getTimeFromLanesEvent(latestX);
+              seekTo(sec);
+            }
+            scrubRaf = null;
+          });
+        }
+      };
+
+      const onMouseUp = () => {
+        if (scrubRaf !== null) {
+          cancelAnimationFrame(scrubRaf);
+          scrubRaf = null;
+        }
+        isScrubbingRef.current = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+      };
+
+      window.addEventListener('mousemove', onMouseMove, { passive: false });
+      window.addEventListener('mouseup', onMouseUp);
+    },
+    [getTimeFromLanesEvent, seekTo, setIsPlaying]
+  );
+
   // Timeline click seek
   const handleLanesClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isScrubbingRef.current) return;
     const target = e.target as HTMLElement;
-    if (target.closest('.cs-clip') || target.closest('.cs-waveform')) return;
-    if (!lanesRef.current) return;
-    const r = lanesRef.current.getBoundingClientRect();
-    const clickX = e.clientX - r.left;
-    const sec = (clickX / r.width) * totalDuration;
+    if (target.closest('.cs-clip') || target.closest('.cs-waveform') || target.closest('.cs-playhead')) return;
+    const sec = getTimeFromLanesEvent(e.clientX);
     seekTo(sec);
   };
 
@@ -477,10 +567,7 @@ export const CapShortsStudio: React.FC = () => {
   };
 
   // Real Video File Import Handler
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const handleDirectUpload = (file: File) => {
     const url = URL.createObjectURL(file);
     const cleanName = file.name.replace(/\.[^/.]+$/, '');
     setVideo(file, url, file.name);
@@ -488,22 +575,28 @@ export const CapShortsStudio: React.FC = () => {
     setPlayheadSec(0);
     showToast(`Loaded ${file.name}`);
 
-    // Auto trigger Whisper transcription
-    startTranscription(file).catch((err) => {
+    // Auto trigger Whisper transcription with current settings
+    startTranscription(file, selectedModel, selectedLanguage).catch((err) => {
       console.warn('Transcription auto-start warning:', err);
     });
   };
 
-  // Convert real transcript into caption clips or use demo
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    handleDirectUpload(file);
+  };
+
+  // Convert real transcript into caption clips
   const captionClips = useMemo(() => {
-    if (isRealVideo && transcript.length > 0) {
+    if (transcript.length > 0) {
       const groups: { id: string; start: number; dur: number; words: { text: string; startSec: number; endSec: number }[] }[] = [];
       let currentWords: WordToken[] = [];
 
       transcript.forEach((tok, idx) => {
         currentWords.push(tok);
         const isPunct = /[.?!]$/.test(tok.word);
-        const isLong = currentWords.length >= 5;
+        const isLong = currentWords.length >= 4;
         const isLast = idx === transcript.length - 1;
 
         if (isPunct || isLong || isLast) {
@@ -512,7 +605,7 @@ export const CapShortsStudio: React.FC = () => {
           groups.push({
             id: `c_${groups.length + 1}`,
             start,
-            dur: Math.max(0.5, +(end - start).toFixed(2)),
+            dur: Math.max(0.4, +(end - start).toFixed(2)),
             words: currentWords.map((w) => ({
               text: w.word,
               startSec: w.start,
@@ -524,8 +617,8 @@ export const CapShortsStudio: React.FC = () => {
       });
       return groups;
     }
-    return DEMO_CAPTION_CLIPS;
-  }, [isRealVideo, transcript]);
+    return [];
+  }, [transcript]);
 
   // Active word in current caption clip for Karaoke
   const activeCaptionClip = captionClips.find(
@@ -804,7 +897,9 @@ export const CapShortsStudio: React.FC = () => {
 
       {/* ============ TOP BAR ============ */}
       <header className="cs-topbar">
-        <div className="cs-logo">CS</div>
+        <div className="cs-logo" style={{ padding: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+          <img src="/logo.png" alt="CapShorts" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+        </div>
         <div className="cs-brand">CapShorts</div>
         <div className="cs-vdiv"></div>
 
@@ -895,7 +990,7 @@ export const CapShortsStudio: React.FC = () => {
         <div className="cs-spacer"></div>
 
         {/* Right side: NO AI Engine Text and NO Status Dot */}
-        <div className="cs-concept-tag">V1.1.9</div>
+        <div className="cs-concept-tag">V1.2.0</div>
         <div className="cs-saved" id="savedInd">
           <i></i>
           <span>Saved</span>
@@ -1017,17 +1112,16 @@ export const CapShortsStudio: React.FC = () => {
                   className="cs-import-zone"
                   id="importZone"
                   onClick={() => fileInputRef.current?.click()}
-                  onDragOver={(e) => e.preventDefault()}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
                   onDrop={(e) => {
                     e.preventDefault();
+                    e.stopPropagation();
                     const file = e.dataTransfer.files?.[0];
                     if (file) {
-                      const url = URL.createObjectURL(file);
-                      setVideo(file, url, file.name);
-                      setProjectTitle(file.name.replace(/\.[^/.]+$/, ''));
-                      setPlayheadSec(0);
-                      showToast(`Imported ${file.name}`);
-                      startTranscription(file).catch(() => {});
+                      handleDirectUpload(file);
                     }
                   }}
                 >
@@ -1040,64 +1134,142 @@ export const CapShortsStudio: React.FC = () => {
                     <div
                       className="cs-media-card"
                       onClick={() => showToast('Active project video selected')}
+                      style={{ border: '1px solid rgba(46,124,246,0.5)', background: 'rgba(46,124,246,0.06)' }}
                     >
-                      <div className="cs-media-thumb" style={{ background: '#222' }}>
+                      <div className="cs-media-thumb" style={{ background: '#1c1c24', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#5B9BFF" strokeWidth="2">
+                          <polygon points="5 3 19 12 5 21 5 3" />
+                        </svg>
                         <span className="cs-duration">{formatTimecode(totalDuration).time}</span>
                       </div>
-                      <p>{videoFile.name}</p>
+                      <p style={{ fontWeight: 600, color: '#fff' }}>{videoFile.name}</p>
+                      <small style={{ color: '#888', fontSize: 10, display: 'block', marginTop: 2 }}>
+                        {(videoFile.size / (1024 * 1024)).toFixed(1)} MB
+                      </small>
                     </div>
-                  ) : null}
-                  {MEDIA_LIBRARY.map((m, idx) => (
-                    <div
-                      key={`media_${idx}`}
-                      className="cs-media-card"
-                      onClick={() => {
-                        fileInputRef.current?.click();
-                        showToast('Select a video file to import');
-                      }}
-                    >
-                      <div className="cs-media-thumb" style={{ background: m.g }}>
-                        <span className="cs-duration">{m.dur}</span>
-                      </div>
-                      <p>{m.name}</p>
+                  ) : (
+                    <div style={{ gridColumn: 'span 2', padding: '16px 8px', textAlign: 'center', color: '#666', fontSize: 11 }}>
+                      No media imported yet. Click Import or drag video above.
                     </div>
-                  ))}
+                  )}
                 </div>
               </>
             )}
 
-            {/* TEXT TAB */}
+            {/* TEXT / PRESETS TAB */}
             {activeRailTab === 'text' && (
               <>
-                <div className="cs-section-label">Text templates</div>
-                {TEMPLATES.map((t) => (
-                  <div
-                    key={t.n}
-                    className="cs-template-row"
-                    onClick={() => {
-                      setActiveTemplate(t.id);
-                      if (t.id === 'mrbeast-yellow-pop') {
-                        setSubFont('Komika Axis');
-                        setSubHighlightColor('#FACC15');
-                      } else if (t.id === 'hormozi-electric-cyan') {
-                        setSubFont('Montserrat ExtraBold');
-                        setSubHighlightColor('#5B9BFF');
-                      } else if (t.id === 'clean-minimal') {
-                        setSubFont('Anton');
-                        setSubHighlightColor('#9C9C9C');
-                      }
-                      showToast(`Preset ${t.n} applied`);
-                    }}
-                  >
-                    <div className="cs-aa" style={{ color: t.c }}>
-                      Ag
-                    </div>
-                    <div>
-                      <b>{t.n}</b>
-                      <small>{t.d}</small>
-                    </div>
-                  </div>
-                ))}
+                <div className="cs-section-label">Subtitle Presets ({allPresets.length})</div>
+
+                {/* Search input */}
+                <input
+                  type="text"
+                  placeholder="Search 20+ styles (e.g. MrBeast, Hormozi)..."
+                  value={presetSearchQuery}
+                  onChange={(e) => setPresetSearchQuery(e.target.value)}
+                  style={{
+                    width: '100%',
+                    background: '#151518',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: 8,
+                    padding: '7px 10px',
+                    fontSize: 11,
+                    color: '#fff',
+                    marginBottom: 8,
+                    outline: 'none',
+                  }}
+                />
+
+                {/* Categories */}
+                <div style={{ display: 'flex', gap: 4, overflowX: 'auto', paddingBottom: 6, marginBottom: 8 }} className="no-scrollbar">
+                  {['All', 'Viral Shorts', 'Neon & Gaming', 'Documentary & Clean', 'Karaoke Sweep', 'Urdu'].map((cat) => (
+                    <button
+                      key={cat}
+                      onClick={() => setSelectedPresetCategory(cat)}
+                      style={{
+                        padding: '3px 8px',
+                        borderRadius: 12,
+                        fontSize: 10,
+                        fontWeight: 600,
+                        whiteSpace: 'nowrap',
+                        background: selectedPresetCategory === cat ? '#2E7CF6' : 'rgba(255,255,255,0.06)',
+                        color: selectedPresetCategory === cat ? '#fff' : '#999',
+                        border: 'none',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Presets List */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 'calc(100vh - 280px)', overflowY: 'auto' }}>
+                  {filteredPresets.map((t) => {
+                    const isSelected = activeTemplateId === t.id;
+                    return (
+                      <div
+                        key={t.id}
+                        className={`cs-template-row${isSelected ? ' is-active' : ''}`}
+                        style={{
+                          border: isSelected ? '1px solid #2E7CF6' : '1px solid rgba(255,255,255,0.06)',
+                          background: isSelected ? 'rgba(46,124,246,0.12)' : undefined,
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => {
+                          setActiveTemplate(t.id);
+                          setSubFont(t.fontFamily);
+                          setSubSize(t.fontSize || 52);
+                          setSubFillColor(t.primaryColor);
+                          setSubHighlightColor(t.highlightColor);
+                          setSubStroke(t.outlineWidth);
+                          setSubCasing(
+                            t.textCasing === 'UPPERCASE'
+                              ? 'UPPER'
+                              : t.textCasing === 'lowercase'
+                              ? 'lower'
+                              : t.textCasing === 'Title Case'
+                              ? 'Title'
+                              : 'Default'
+                          );
+                          updateCustomStyle({
+                            fontFamily: t.fontFamily,
+                            fontSize: t.fontSize,
+                            primaryColor: t.primaryColor,
+                            highlightColor: t.highlightColor,
+                            outlineColor: t.outlineColor,
+                            outlineWidth: t.outlineWidth,
+                            shadowColor: t.shadowColor,
+                            shadowDepth: t.shadowDepth,
+                            textCasing: t.textCasing,
+                            animationTrigger: t.animationTrigger,
+                          });
+                          showToast(`Applied preset: ${t.name}`);
+                        }}
+                      >
+                        <div
+                          className="cs-aa"
+                          style={{
+                            color: t.highlightColor || t.primaryColor,
+                            fontFamily: t.fontFamily,
+                            WebkitTextStroke: t.outlineWidth > 0 ? `1px ${t.outlineColor}` : undefined,
+                            background: '#121215',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                          }}
+                        >
+                          Ag
+                        </div>
+                        <div style={{ overflow: 'hidden' }}>
+                          <b style={{ color: '#fff', fontSize: 12 }}>{t.name}</b>
+                          <small style={{ color: '#888', display: 'block' }}>
+                            {t.category} · {t.animationTrigger}
+                          </small>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </>
             )}
 
@@ -1185,9 +1357,110 @@ export const CapShortsStudio: React.FC = () => {
               </>
             )}
 
-            {/* AI LAB TAB */}
+            {/* AI LAB & CAPTIONS TAB */}
             {activeRailTab === 'ai' && (
               <>
+                <div className="cs-prop-card">
+                  <h4>Auto Captions &amp; Subtitles</h4>
+                  <div className="cs-field-label">Language</div>
+                  <select
+                    className="cs-select"
+                    value={selectedLanguage}
+                    onChange={(e) => setSelectedLanguage(e.target.value)}
+                  >
+                    <option value="auto">Auto Detect</option>
+                    <option value="urdu">Urdu (Roman Urdu)</option>
+                    <option value="ur_script">Urdu Script (اردو خط)</option>
+                    <option value="en">English</option>
+                    <option value="hi">Hindi</option>
+                    <option value="es">Spanish</option>
+                    <option value="ar">Arabic</option>
+                    <option value="fr">French</option>
+                    <option value="de">German</option>
+                  </select>
+
+                  <div className="cs-field-label" style={{ marginTop: 8 }}>Speech Engine</div>
+                  <select
+                    className="cs-select"
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                  >
+                    <option value="whisper-large-v3-turbo">⚡ Ultra Fast Cloud Engine (~2-3s) [Recommended]</option>
+                    <option value="base">💻 Standard Offline Engine (On-Device)</option>
+                    <option value="small">💻 High Accuracy Offline Engine (On-Device)</option>
+                  </select>
+
+                  <button
+                    className="cs-btn-primary"
+                    style={{
+                      width: '100%',
+                      marginTop: 12,
+                      padding: '9px 14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                    }}
+                    disabled={!videoFile || isTranscribing}
+                    onClick={() => {
+                      if (videoFile) {
+                        startTranscription(videoFile, selectedModel, selectedLanguage);
+                        showToast('Generating AI auto captions...');
+                      } else {
+                        showToast('Please import a video first');
+                      }
+                    }}
+                  >
+                    {isTranscribing ? `Transcribing (${transcribeProgress}%)...` : 'Generate Auto Captions'}
+                  </button>
+
+                  {isTranscribing && (
+                    <div style={{ marginTop: 8 }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: 11,
+                          color: '#9C9C9C',
+                          marginBottom: 4,
+                        }}
+                      >
+                        <span
+                          style={{
+                            maxWidth: 180,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {transcribingStep || 'Processing audio...'}
+                        </span>
+                        <span style={{ color: '#5B9BFF', fontFamily: 'monospace' }}>
+                          {transcribeProgress}%
+                        </span>
+                      </div>
+                      <div
+                        style={{
+                          width: '100%',
+                          height: 4,
+                          background: '#1c1c1f',
+                          borderRadius: 2,
+                          overflow: 'hidden',
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: `${Math.max(5, transcribeProgress)}%`,
+                            height: '100%',
+                            background: 'linear-gradient(90deg, #2E7CF6, #5B9BFF)',
+                            transition: 'width 0.3s',
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div className="cs-prop-card">
                   <h4>
                     AI Analysis <span className="cs-pill">LIVE</span>
@@ -1274,8 +1547,8 @@ export const CapShortsStudio: React.FC = () => {
                 maxHeight: 'calc(100% - 20px)',
               }}
             >
-              {/* Real Video Player or Dark Mock Canvas */}
-              {isRealVideo && videoUrl ? (
+              {/* Real Video Player or Dropzone */}
+              {videoUrl ? (
                 <video
                   ref={videoRef}
                   src={videoUrl}
@@ -1297,37 +1570,98 @@ export const CapShortsStudio: React.FC = () => {
                     opacity: videoOpacity / 100,
                   }}
                 />
-              ) : null}
+              ) : (
+                <div
+                  className="cs-canvas-upload-zone"
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) handleDirectUpload(file);
+                  }}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    padding: 24,
+                    textAlign: 'center',
+                    background: 'radial-gradient(circle at center, rgba(46,124,246,0.08) 0%, rgba(13,13,17,0.95) 75%)',
+                    zIndex: 15,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 56,
+                      height: 56,
+                      borderRadius: 16,
+                      background: 'rgba(46,124,246,0.18)',
+                      border: '1px solid rgba(91,155,255,0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginBottom: 14,
+                      boxShadow: '0 8px 24px rgba(46,124,246,0.2)',
+                    }}
+                  >
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#5B9BFF" strokeWidth="2">
+                      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                    </svg>
+                  </div>
+                  <h4 style={{ color: '#fff', fontSize: 15, fontWeight: 700, margin: '0 0 6px 0' }}>
+                    Import Video to Edit
+                  </h4>
+                  <p style={{ color: '#9C9C9C', fontSize: 11, maxWidth: 210, margin: '0 0 16px 0', lineHeight: 1.4 }}>
+                    Drop your video here or click to browse files
+                  </p>
+                  <button
+                    className="cs-btn-primary"
+                    style={{ padding: '8px 18px', fontSize: 12, fontWeight: 600 }}
+                  >
+                    Choose Video File
+                  </button>
+                </div>
+              )}
 
               <div className="cs-preview-tag">PREVIEW</div>
               <div className="cs-aspect-tag">{aspectRatio}</div>
 
               {/* Dynamic Hormozi Karaoke Caption Overlay */}
-              <div
-                className="cs-caption-line"
-                id="previewCaption"
-                style={{
-                  fontFamily: subFont,
-                  textTransform: subCasing === 'UPPER' ? 'uppercase' : subCasing === 'lower' ? 'lowercase' : 'none',
-                }}
-              >
-                {previewWords.map((w, i) => (
-                  <span
-                    key={`pw_${i}_${w.text}`}
-                    className={`cs-w${w.isCurrent ? ' is-on' : ''}${w.isHighlight ? ' cs-hl' : ''}`}
-                    style={{
-                      fontSize: `${subSize * 0.42}px`,
-                      color: w.isHighlight ? subHighlightColor : subFillColor,
-                      WebkitTextStroke: `${subStroke * 0.4}px black`,
-                      background: w.isCurrent ? 'rgba(46,124,246,.55)' : 'transparent',
-                      borderRadius: w.isCurrent ? '4px' : undefined,
-                      padding: w.isCurrent ? '0 6px' : undefined,
-                    }}
-                  >
-                    {w.text}
-                  </span>
-                ))}
-              </div>
+              {previewWords.length > 0 && (
+                <div
+                  className="cs-caption-line"
+                  id="previewCaption"
+                  style={{
+                    fontFamily: subFont,
+                    textTransform: subCasing === 'UPPER' ? 'uppercase' : subCasing === 'lower' ? 'lowercase' : 'none',
+                  }}
+                >
+                  {previewWords.map((w, i) => (
+                    <span
+                      key={`pw_${i}_${w.text}`}
+                      className={`cs-w${w.isCurrent ? ' is-on' : ''}${w.isHighlight ? ' cs-hl' : ''}`}
+                      style={{
+                        fontSize: `${subSize * 0.42}px`,
+                        color: w.isHighlight ? subHighlightColor : subFillColor,
+                        WebkitTextStroke: `${subStroke * 0.4}px black`,
+                        background: w.isCurrent ? 'rgba(46,124,246,.55)' : 'transparent',
+                        borderRadius: w.isCurrent ? '4px' : undefined,
+                        padding: w.isCurrent ? '0 6px' : undefined,
+                      }}
+                    >
+                      {w.text}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -1832,47 +2166,53 @@ export const CapShortsStudio: React.FC = () => {
           {/* Lanes */}
           <div className="cs-lanes" id="lanes" ref={lanesRef} onClick={handleLanesClick}>
             {/* Ruler */}
-            <div className="cs-ruler" id="ruler">
+            <div className="cs-ruler" id="ruler" onMouseDown={handleScrubStart} style={{ cursor: 'pointer' }}>
               {rulerTicks}
             </div>
 
             {/* V2 Lane: Captions */}
             <div className="cs-lane" id="laneV2" style={{ height: '38px' }} data-track="v2">
-              {captionClips.map((c) => {
-                const inClip = playheadSec >= c.start && playheadSec <= c.start + c.dur;
-                const isSel = selectedClip?.trackId === 'v2' && selectedClip?.clipId === c.id;
-                return (
-                  <div
-                    key={c.id}
-                    className={`cs-clip is-caption${isSel ? ' is-selected' : ''}`}
-                    style={{
-                      left: `${(c.start / totalDuration) * 100}%`,
-                      width: `${(c.dur / totalDuration) * 100}%`,
-                    }}
-                    data-clip-id={c.id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedClip({ trackId: 'v2', clipId: c.id });
-                    }}
-                  >
-                    <span className="cs-clip-label">
-                      {c.words.map((w, wi) => {
-                        const isOn = inClip && playheadSec >= w.startSec && playheadSec <= w.endSec;
-                        return (
-                          <span
-                            key={`w_${wi}`}
-                            className={`cs-w${isOn ? ' is-on' : ''}`}
-                            data-ws={w.startSec}
-                            data-we={w.endSec}
-                          >
-                            {w.text}{' '}
-                          </span>
-                        );
-                      })}
-                    </span>
-                  </div>
-                );
-              })}
+              {captionClips.length > 0 ? (
+                captionClips.map((c) => {
+                  const inClip = playheadSec >= c.start && playheadSec <= c.start + c.dur;
+                  const isSel = selectedClip?.trackId === 'v2' && selectedClip?.clipId === c.id;
+                  return (
+                    <div
+                      key={c.id}
+                      className={`cs-clip is-caption${isSel ? ' is-selected' : ''}`}
+                      style={{
+                        left: `${(c.start / totalDuration) * 100}%`,
+                        width: `${(c.dur / totalDuration) * 100}%`,
+                      }}
+                      data-clip-id={c.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedClip({ trackId: 'v2', clipId: c.id });
+                      }}
+                    >
+                      <span className="cs-clip-label">
+                        {c.words.map((w, wi) => {
+                          const isOn = inClip && playheadSec >= w.startSec && playheadSec <= w.endSec;
+                          return (
+                            <span
+                              key={`w_${wi}`}
+                              className={`cs-w${isOn ? ' is-on' : ''}`}
+                              data-ws={w.startSec}
+                              data-we={w.endSec}
+                            >
+                              {w.text}{' '}
+                            </span>
+                          );
+                        })}
+                      </span>
+                    </div>
+                  );
+                })
+              ) : (
+                <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666', fontSize: 11 }}>
+                  Captions Track (Generate AI captions to view subtitle blocks)
+                </div>
+              )}
             </div>
 
             {/* V1 Lane: Main Video Clips */}
@@ -1896,86 +2236,93 @@ export const CapShortsStudio: React.FC = () => {
                   ))}
                 </div>
               ) : (
-                DEMO_VIDEO_CLIPS.map((c) => {
-                  const crnd = mulberry32(c.seed);
-                  const isSel = selectedClip?.trackId === 'v1' && selectedClip?.clipId === c.id;
-                  return (
-                    <div
-                      key={c.id}
-                      className={`cs-clip${isSel ? ' is-selected' : ''}`}
-                      style={{
-                        left: `${(c.start / totalDuration) * 100}%`,
-                        width: `${(c.dur / totalDuration) * 100}%`,
-                      }}
-                      data-clip-id={c.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedClip({ trackId: 'v1', clipId: c.id });
-                      }}
-                    >
-                      <span className="cs-clip-label">{c.label}</span>
-                      {Array.from({ length: 9 }).map((_, fi) => (
-                        <div
-                          key={`df_${fi}`}
-                          className="cs-frame"
-                          style={{
-                            background: FILM_GRADS[Math.floor(crnd() * FILM_GRADS.length)],
-                          }}
-                        />
-                      ))}
-                    </div>
-                  );
-                })
+                <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666', fontSize: 11 }}>
+                  Import a video to view timeline clips
+                </div>
               )}
             </div>
 
             {/* A1 Lane: Audio Waveform & Silence overlays */}
             <div className="cs-lane" id="laneA1" style={{ height: '56px' }} data-track="a1">
-              <div
-                className={`cs-waveform${selectedClip?.trackId === 'a1' ? ' is-selected' : ''}`}
-                style={{
-                  left: isRealVideo ? '0%' : `${(DEMO_AUDIO_CLIP.start / totalDuration) * 100}%`,
-                  width: isRealVideo ? '100%' : `${(DEMO_AUDIO_CLIP.dur / totalDuration) * 100}%`,
-                }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedClip({ trackId: 'a1', clipId: 'a1' });
-                }}
-              >
-                {waveformBars}
-                {!silencesRemoved &&
-                  (isRealVideo && silenceRegions.length > 0
-                    ? silenceRegions.map((s, idx) => (
-                        <div
-                          key={`silence_${idx}`}
-                          className="cs-silence"
-                          style={{
-                            left: `${(s.start / totalDuration) * 100}%`,
-                            width: `${(s.duration / totalDuration) * 100}%`,
-                          }}
-                          title={`Silence ${s.duration.toFixed(1)}s — detected by FFmpeg`}
-                        />
-                      ))
-                    : DEMO_AUDIO_CLIP.silences.map((s, idx) => (
-                        <div
-                          key={`silence_${idx}`}
-                          className="cs-silence"
-                          style={{
-                            left: `${((s.start - DEMO_AUDIO_CLIP.start) / DEMO_AUDIO_CLIP.dur) * 100}%`,
-                            width: `${(s.dur / DEMO_AUDIO_CLIP.dur) * 100}%`,
-                          }}
-                          title={`Silence ${s.dur.toFixed(1)}s — detected by AI`}
-                        />
-                      )))}
-              </div>
+              {isRealVideo ? (
+                <div
+                  className={`cs-waveform${selectedClip?.trackId === 'a1' ? ' is-selected' : ''}`}
+                  style={{
+                    left: '0%',
+                    width: '100%',
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedClip({ trackId: 'a1', clipId: 'a1' });
+                  }}
+                >
+                  {waveformBars}
+                  {!silencesRemoved &&
+                    silenceRegions.map((s, idx) => (
+                      <div
+                        key={`silence_${idx}`}
+                        className="cs-silence"
+                        style={{
+                          left: `${(s.start / totalDuration) * 100}%`,
+                          width: `${(s.duration / totalDuration) * 100}%`,
+                        }}
+                        title={`Silence ${s.duration.toFixed(1)}s — detected by FFmpeg`}
+                      />
+                    ))}
+                </div>
+              ) : (
+                <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666', fontSize: 11 }}>
+                  Audio Track
+                </div>
+              )}
             </div>
 
             {/* Playhead */}
             <div
               className="cs-playhead"
               id="playhead"
-              style={{ left: `${(playheadSec / totalDuration) * 100}%` }}
-            />
+              style={{
+                left: `${(playheadSec / totalDuration) * 100}%`,
+                cursor: 'ew-resize',
+                zIndex: 35,
+              }}
+              onMouseDown={handleScrubStart}
+            >
+              <div
+                style={{
+                  position: 'absolute',
+                  top: -2,
+                  left: -8,
+                  width: 17,
+                  height: 22,
+                  background: '#ef4444',
+                  borderRadius: '0 0 4px 4px',
+                  cursor: 'ew-resize',
+                  boxShadow: '0 2px 8px rgba(239, 68, 68, 0.7)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 40,
+                }}
+                onMouseDown={handleScrubStart}
+                title="Drag playhead to scrub timeline"
+              >
+                <div style={{ width: 4, height: 4, background: '#ffffff', borderRadius: '50%' }} />
+              </div>
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  bottom: 0,
+                  left: -10,
+                  width: 20,
+                  cursor: 'ew-resize',
+                  zIndex: 35,
+                }}
+                onMouseDown={handleScrubStart}
+                title="Drag playhead line"
+              />
+            </div>
           </div>
         </div>
       </section>
