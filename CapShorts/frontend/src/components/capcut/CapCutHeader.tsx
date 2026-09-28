@@ -6,7 +6,6 @@ import {
   Square,
   Share2,
   RefreshCw,
-  Cpu,
   Undo2,
   Redo2,
   Settings,
@@ -22,7 +21,6 @@ export const CapCutHeader: React.FC = () => {
   const {
     aspectRatio,
     setAspectRatio,
-    engineHealth,
     isExporting,
     setIsExportModalOpen,
     setIsSettingsModalOpen,
@@ -34,7 +32,6 @@ export const CapCutHeader: React.FC = () => {
     useShallow((state) => ({
       aspectRatio: state.aspectRatio,
       setAspectRatio: state.setAspectRatio,
-      engineHealth: state.engineHealth,
       isExporting: state.isExporting,
       setIsExportModalOpen: state.setIsExportModalOpen,
       setIsSettingsModalOpen: state.setIsSettingsModalOpen,
@@ -192,27 +189,8 @@ export const CapCutHeader: React.FC = () => {
         </button>
       </div>
 
-      {/* Right: Engine Status & Apple-Grade Export Button */}
+      {/* Right: Actions & Export Button */}
       <div className="flex items-center space-x-2.5">
-        {/* Dynamic System Status Pill */}
-        <div className="hidden sm:flex items-center space-x-2 text-xs bg-zinc-900/80 border border-white/[0.06] px-3 py-1 rounded-full text-zinc-300 shadow-sm">
-          {engineHealth?.status === 'online' ? (
-            <>
-              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.7)] animate-pulse"></span>
-              <span className="font-semibold text-zinc-200">AI Engine Online</span>
-              <span className="text-zinc-600">·</span>
-              <span className="text-[11px] font-medium text-indigo-300">
-                {engineHealth?.cuda_available ? 'GPU Accelerated' : 'CPU Mode'}
-              </span>
-            </>
-          ) : (
-            <>
-              <span className="w-2 h-2 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.7)]"></span>
-              <span className="font-semibold text-rose-300">AI Engine Offline</span>
-            </>
-          )}
-        </div>
-
         {/* Replace/New Video */}
         {videoFile && (
           <button

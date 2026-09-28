@@ -75,17 +75,18 @@ const TimelinePlayhead: React.FC<TimelinePlayheadProps> = React.memo(({
       {/* Playhead Top Badge Handle (Click and drag to scrub) */}
       <div
         onMouseDown={onPlayheadMouseDown}
-        className="absolute -top-1 -left-[7px] w-4 h-5 bg-red-500 hover:bg-red-400 active:scale-110 rounded-b-sm flex flex-col items-center justify-center pointer-events-auto cursor-ew-resize shadow-md shadow-red-500/40 transition-transform"
-        title="Drag to scrub timeline"
+        className="absolute -top-1.5 -left-[9px] w-5 h-6 bg-red-500 hover:bg-red-400 active:scale-110 rounded-b-md flex flex-col items-center justify-center pointer-events-auto cursor-ew-resize shadow-lg shadow-red-500/50 transition-transform z-40 ring-1 ring-white/30"
+        title="Drag playhead to scrub timeline"
       >
         <div className="w-1.5 h-1.5 bg-white rounded-full pointer-events-none mb-0.5" />
-        <div className="w-0.5 h-1.5 bg-white/70 rounded-full pointer-events-none" />
+        <div className="w-0.5 h-2 bg-white/90 rounded-full pointer-events-none" />
       </div>
 
-      {/* Red vertical stem handle: clicking anywhere on the line allows scrubbing */}
+      {/* Red vertical stem handle: clicking or dragging anywhere on the line allows scrubbing */}
       <div
         onMouseDown={onPlayheadMouseDown}
-        className="absolute top-4 bottom-0 -left-1.5 w-3.5 pointer-events-auto cursor-ew-resize hover:bg-red-500/20 transition-colors"
+        className="absolute top-0 bottom-0 -left-2.5 w-5 pointer-events-auto cursor-ew-resize hover:bg-red-500/25 active:bg-red-500/35 transition-colors z-40"
+        title="Drag playhead line across timeline"
       />
     </div>
   );
@@ -942,12 +943,13 @@ export const CapCutTimeline: React.FC = () => {
               isBladeActive ? 'cursor-crosshair' : 'cursor-default'
             }`}
             onClick={(e) => {
+              const clickTime = getTimeFromMouseEvent(e);
               if (isBladeActive) {
-                const clickTime = getTimeFromMouseEvent(e);
                 splitSegmentAtTime(clickTime, 'video');
                 setCurrentTime(clickTime);
               } else {
                 setSelectedTimelineItem(null, null);
+                setCurrentTime(clickTime);
               }
             }}
           >
