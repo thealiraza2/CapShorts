@@ -110,46 +110,6 @@ const FILM_GRADS = [
   'linear-gradient(135deg,#33331f,#17170d)',
 ];
 
-const DEMO_VIDEO_CLIPS = [
-  { id: 'v1', label: 'clip_01.mp4', start: 1.2, dur: 20.4, seed: 11 },
-  { id: 'v2', label: 'clip_02.mp4', start: 22.8, dur: 15.6, seed: 42 },
-  { id: 'v3', label: 'clip_03.mp4', start: 39.6, dur: 18.0, seed: 77 },
-];
-
-const DEMO_CAPTION_CLIPS = [
-  { id: 'c1', start: 2.4, dur: 9.6, words: makeWords('ye 3 second tumhari video badal denge', 2.4, 9.6) },
-  { id: 'c2', start: 13.2, dur: 7.2, words: makeWords('dekho kaise ye trick kaam karti hai', 13.2, 7.2) },
-  { id: 'c3', start: 21.6, dur: 10.8, words: makeWords('agar tumne skip kiya toh bahut kuch miss karoge', 21.6, 10.8) },
-  { id: 'c4', start: 34.8, dur: 8.4, words: makeWords('comment karo aur follow karna mat bhoolna', 34.8, 8.4) },
-  { id: 'c5', start: 45.6, dur: 9.6, words: makeWords('subscribe karo next short ke liye', 45.6, 9.6) },
-];
-
-const DEMO_AUDIO_CLIP = {
-  id: 'a1',
-  label: 'dialogue.wav',
-  start: 1.2,
-  dur: 56.4,
-  seed: 99,
-  silences: [
-    { start: 16.8, dur: 4.2 },
-    { start: 33.0, dur: 3.0 },
-    { start: 49.2, dur: 3.6 },
-  ],
-};
-
-const MEDIA_LIBRARY = [
-  { name: 'vlog_ep12_raw.mp4', dur: '12:40', g: 'linear-gradient(135deg,#2b3a55,#121a2a)' },
-  { name: 'podcast_clip.mov', dur: '04:18', g: 'linear-gradient(135deg,#3a2c1c,#1d1409)' },
-  { name: 'hook_take3.mp4', dur: '00:58', g: 'linear-gradient(135deg,#1c3a30,#0d1c16)' },
-  { name: 'broll_city.mp4', dur: '02:07', g: 'linear-gradient(135deg,#3a1c2c,#1e0d15)' },
-];
-
-const TEMPLATES = [
-  { n: 'Hormozi Bold', d: 'Heavy caps · yellow pop', c: '#fff', id: 'hormozi-bold-red' },
-  { n: 'Beast Viral', d: 'Word-by-word bounce', c: '#FACC15', id: 'mrbeast-yellow-pop' },
-  { n: 'Neon Glow', d: 'Night-mode glow', c: '#5B9BFF', id: 'hormozi-electric-cyan' },
-  { n: 'Minimal Clean', d: 'Subtle lower-third', c: '#9C9C9C', id: 'clean-minimal' },
-];
 
 const AUDIO_TRACKS = [
   { n: 'Phonk Drive', d: '02:34', seed: 500, type: 'phonk' as const },
@@ -263,9 +223,9 @@ export const CapShortsStudio: React.FC = () => {
   }, [allPresets, selectedPresetCategory, presetSearchQuery]);
 
   // Playhead & Playback state (synced with video store or demo)
-  const isRealVideo = Boolean(videoUrl && storeDuration > 0);
-  const totalDuration = isRealVideo ? storeDuration : 60;
-  const [playheadSec, setPlayheadSec] = useState(isRealVideo ? storeCurrentTime : 10.8);
+  const isRealVideo = Boolean(videoUrl);
+  const totalDuration = isRealVideo && storeDuration > 0 ? storeDuration : 60;
+  const [playheadSec, setPlayheadSec] = useState(storeCurrentTime || 0);
   const [isPlaying, setLocalIsPlaying] = useState(false);
 
   // Toast
@@ -498,8 +458,6 @@ export const CapShortsStudio: React.FC = () => {
   // Timeline click seek
   const handleLanesClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (isScrubbingRef.current) return;
-    const target = e.target as HTMLElement;
-    if (target.closest('.cs-clip') || target.closest('.cs-waveform') || target.closest('.cs-playhead')) return;
     const sec = getTimeFromLanesEvent(e.clientX);
     seekTo(sec);
   };
@@ -574,6 +532,15 @@ export const CapShortsStudio: React.FC = () => {
     setProjectTitle(cleanName);
     setPlayheadSec(0);
     showToast(`Loaded ${file.name}`);
+
+    // Preload video duration immediately from URL
+    const tempVideo = document.createElement('video');
+    tempVideo.src = url;
+    tempVideo.onloadedmetadata = () => {
+      if (tempVideo.duration && !isNaN(tempVideo.duration) && isFinite(tempVideo.duration)) {
+        setDuration(tempVideo.duration);
+      }
+    };
 
     // Auto trigger Whisper transcription with current settings
     startTranscription(file, selectedModel, selectedLanguage).catch((err) => {
@@ -710,7 +677,7 @@ export const CapShortsStudio: React.FC = () => {
   // Audio Waveform bars generator
   const waveformBars = useMemo(() => {
     const bars = [];
-    const waveRnd = mulberry32(DEMO_AUDIO_CLIP.seed);
+    const waveRnd = mulberry32(99);
     for (let i = 0; i < 150; i++) {
       bars.push(
         <i
@@ -1555,6 +1522,31 @@ export const CapShortsStudio: React.FC = () => {
                   className="w-full h-full object-contain"
                   playsInline
                   onClick={togglePlayback}
+                  onLoadedMetadata={(e) => {
+                    const dur = e.currentTarget.duration;
+                    if (dur && !isNaN(dur) && isFinite(dur)) {
+                      setDuration(dur);
+                    }
+                  }}
+                  onTimeUpdate={(e) => {
+                    if (!isScrubbingRef.current) {
+                      const ct = e.currentTarget.currentTime;
+                      setPlayheadSec(ct);
+                      setCurrentTime(ct);
+                    }
+                  }}
+                  onPlay={() => {
+                    setIsPlaying(true);
+                    setLocalIsPlaying(true);
+                  }}
+                  onPause={() => {
+                    setIsPlaying(false);
+                    setLocalIsPlaying(false);
+                  }}
+                  onEnded={() => {
+                    setIsPlaying(false);
+                    setLocalIsPlaying(false);
+                  }}
                   style={{
                     filter:
                       activeFilter === 'Vivid'
@@ -1634,7 +1626,7 @@ export const CapShortsStudio: React.FC = () => {
               <div className="cs-preview-tag">PREVIEW</div>
               <div className="cs-aspect-tag">{aspectRatio}</div>
 
-              {/* Dynamic Hormozi Karaoke Caption Overlay */}
+              {/* Dynamic Hormozi / Urdu Karaoke Caption Overlay */}
               {previewWords.length > 0 && (
                 <div
                   className="cs-caption-line"
@@ -1642,6 +1634,7 @@ export const CapShortsStudio: React.FC = () => {
                   style={{
                     fontFamily: subFont,
                     textTransform: subCasing === 'UPPER' ? 'uppercase' : subCasing === 'lower' ? 'lowercase' : 'none',
+                    direction: (selectedLanguage === 'ur_script' || (previewWords[0] && /[\u0600-\u06FF]/.test(previewWords[0].text))) ? 'rtl' : 'ltr',
                   }}
                 >
                   {previewWords.map((w, i) => (
